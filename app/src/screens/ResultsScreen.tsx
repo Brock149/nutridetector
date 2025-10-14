@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Button, Image, ScrollView, Modal, Alert, TextInput, TouchableOpacity, PanResponder } from 'react-native';
+import { View, Text, Button, Image, ScrollView, Modal, Alert, TextInput, PanResponder } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { useRoute } from '@react-navigation/native';
-import { useApp } from '../context/AppContext';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import { useApp, ScanResult } from '../context/AppContext';
+import { generateScanId } from '../utils/id';
 
 type FieldReadingParam = {
   className: string;
@@ -14,6 +15,16 @@ type FieldReadingParam = {
   unit?: string;
   cropUri?: string;
 };
+
+type ServingSizeQuantity = {
+  quantity?: number;
+  unit?: string;
+} | undefined;
+
+type ServingSizeAlt = {
+  value?: number;
+  unit?: string;
+} | undefined;
 
 type MealSliderProps = {
   value: number;
@@ -158,113 +169,253 @@ const MealSlider: React.FC<MealSliderProps> = ({ value, min, max, step, onChange
   );
 };
 
+const formatNumber = (value: number, digits = 2) => (Number.isFinite(value) ? value.toFixed(digits) : '—');
+
 export default function ResultsScreen() {
+  const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const { goalMode, setGoalMode } = useApp();
   const {
+    price: incomingPrice,
     imageUri,
-    price,
-    calories: pCalories,
-    proteinGrams: pProtein,
-    servingsPerContainer: pServings,
+    calories: initialCalories,
+    proteinGrams: initialProtein,
+    servingsPerContainer: initialServings,
     rawText,
     fieldReadings = [],
-    servingSize,
-    servingSizeAlt,
+    servingSize: initialServingSize,
+    servingSizeAlt: initialServingSizeAlt,
+    scanId: incomingScanId,
+    createdAt: incomingCreatedAt,
   } = route.params ?? {};
-  const [calories, setCalories] = useState<number>(pCalories ?? 0);
-  const [proteinGrams, setProteinGrams] = useState<number>(pProtein ?? 0);
-  const [servingsPerContainer, setServingsPerContainer] = useState<number>(pServings ?? 1);
-  const [editVisible, setEditVisible] = useState(false);
-  const [editServingQuantity, setEditServingQuantity] = useState<string>(servingSize?.quantity != null ? String(servingSize.quantity) : '');
-  const [editServingUnit, setEditServingUnit] = useState<string>(servingSize?.unit ?? '');
-  const [editServingAltValue, setEditServingAltValue] = useState<string>(servingSizeAlt?.value != null ? String(servingSizeAlt.value) : '');
-  const [editServingAltUnit, setEditServingAltUnit] = useState<string>(servingSizeAlt?.unit ?? '');
+
+  const price = typeof incomingPrice === 'number' ? incomingPrice : Number(incomingPrice) || 0;
+
+  const scanIdRef = useRef<string>(incomingScanId ?? generateScanId());
+  const createdAtRef = useRef<string>(incomingCreatedAt ?? new Date().toISOString());
+
+  const { goalMode, setGoalMode, addOrUpdateScanResult } = useApp();
+
+  const [calories, setCalories] = useState<number | undefined>(typeof initialCalories === 'number' ? initialCalories : undefined);
+  const [proteinGrams, setProteinGrams] = useState<number | undefined>(typeof initialProtein === 'number' ? initialProtein : undefined);
+  const [servingsPerContainer, setServingsPerContainer] = useState<number | undefined>(typeof initialServings === 'number' ? initialServings : undefined);
+
+  const [servingSizeState, setServingSizeState] = useState<ServingSizeQuantity>(initialServingSize);
+  const [servingSizeAltState, setServingSizeAltState] = useState<ServingSizeAlt>(initialServingSizeAlt);
 
   const [mealMultiplier, setMealMultiplier] = useState(2.5);
 
+  const [showDebug, setShowDebug] = useState(false);
+  const [showFields, setShowFields] = useState(false);
+  const [editVisible, setEditVisible] = useState(false);
+  const [editServingQuantity, setEditServingQuantity] = useState('');
+  const [editServingUnit, setEditServingUnit] = useState('');
+  const [editServingAltValue, setEditServingAltValue] = useState('');
+  const [editServingAltUnit, setEditServingAltUnit] = useState('');
+
   const metrics = useMemo(() => {
-    const p = Number(price) || 1;
-    const totalCalories = calories * Math.max(1, Number(servingsPerContainer) || 1);
-    const totalProtein = (proteinGrams || 0) * Math.max(1, Number(servingsPerContainer) || 1);
-    const servingsVal = Math.max(0, Number(servingsPerContainer) || 0);
+    const priceSafe = price > 0 ? price : 1;
+    const caloriesPerServing = calories ?? 0;
+    const proteinPerServing = proteinGrams ?? 0;
+    const servingsVal = servingsPerContainer ?? 0;
+    const totalCalories = caloriesPerServing * Math.max(1, servingsVal);
+    const totalProtein = proteinPerServing * Math.max(1, servingsVal);
     const multiplier = mealMultiplier > 0 ? mealMultiplier : 1;
     const mealsPerContainer = servingsVal > 0 ? servingsVal / multiplier : 0;
-    const costPerMeal = mealsPerContainer > 0 ? p / mealsPerContainer : Infinity;
+    const costPerMeal = mealsPerContainer > 0 ? priceSafe / mealsPerContainer : Infinity;
+
     return {
-      // New: factor in servings per container
-      caloriesPerDollar: totalCalories / p,
-      // New: factor total protein (per serving × servings)
-      proteinPerDollar: totalProtein / p,
-      // Switch to Cal/Protein per serving (avoid div by zero)
-      caloriesPerProtein: proteinGrams > 0 ? calories / proteinGrams : Infinity,
-      // New metric: cost per serving
-      costPerServing: p / Math.max(1, Number(servingsPerContainer) || 1),
+      caloriesPerDollar: totalCalories / priceSafe,
+      proteinPerDollar: totalProtein / priceSafe,
+      caloriesPerProtein: proteinPerServing > 0 ? caloriesPerServing / proteinPerServing : Infinity,
+      costPerServing: servingsVal > 0 ? priceSafe / servingsVal : Infinity,
       mealsPerContainer,
       costPerMeal,
     };
   }, [price, calories, proteinGrams, servingsPerContainer, mealMultiplier]);
 
-  const [showDebug, setShowDebug] = useState(false);
-  const [showFields, setShowFields] = useState(false);
+  const buildScanResult = useCallback((): ScanResult | null => {
+    if (!Number.isFinite(price) || price <= 0) {
+      return null;
+    }
+
+    const normalizedCalories = typeof calories === 'number' && Number.isFinite(calories) && calories > 0 ? calories : undefined;
+    const normalizedProtein = typeof proteinGrams === 'number' && Number.isFinite(proteinGrams) && proteinGrams >= 0 ? proteinGrams : undefined;
+    const normalizedServings = typeof servingsPerContainer === 'number' && Number.isFinite(servingsPerContainer) && servingsPerContainer > 0 ? servingsPerContainer : undefined;
+
+    const sanitizeMetric = (value: number): number | null => (Number.isFinite(value) ? value : null);
+
+    return {
+      id: scanIdRef.current,
+      createdAt: createdAtRef.current,
+      imageUri,
+      price,
+      calories: normalizedCalories,
+      proteinGrams: normalizedProtein,
+      servingsPerContainer: normalizedServings,
+      mealMultiplier,
+      goalMode,
+      metrics: {
+        caloriesPerDollar: sanitizeMetric(metrics.caloriesPerDollar),
+        proteinPerDollar: sanitizeMetric(metrics.proteinPerDollar),
+        caloriesPerProtein: sanitizeMetric(metrics.caloriesPerProtein),
+        costPerServing: sanitizeMetric(metrics.costPerServing),
+        mealsPerContainer: sanitizeMetric(metrics.mealsPerContainer),
+        costPerMeal: sanitizeMetric(metrics.costPerMeal),
+      },
+      servingSize: servingSizeState,
+      servingSizeAlt: servingSizeAltState,
+    };
+  }, [price, calories, proteinGrams, servingsPerContainer, mealMultiplier, goalMode, metrics, imageUri, servingSizeState, servingSizeAltState]);
+
+  const payload = useMemo(() => buildScanResult(), [buildScanResult]);
+  const savedSignatureRef = useRef<string | null>(null);
+  const currentScanId = route.params?.scanId;
+  const currentCreatedAt = route.params?.createdAt;
+
+  useEffect(() => {
+    if (!payload) return;
+    const signature = JSON.stringify({
+      id: payload.id,
+      createdAt: payload.createdAt,
+      price: payload.price,
+      calories: payload.calories,
+      proteinGrams: payload.proteinGrams,
+      servingsPerContainer: payload.servingsPerContainer,
+      mealMultiplier: payload.mealMultiplier,
+      goalMode: payload.goalMode,
+      metrics: payload.metrics,
+      servingSize: payload.servingSize,
+      servingSizeAlt: payload.servingSizeAlt,
+    });
+    if (savedSignatureRef.current !== signature) {
+      savedSignatureRef.current = signature;
+      addOrUpdateScanResult(payload);
+    }
+    if (currentScanId !== payload.id || currentCreatedAt !== payload.createdAt) {
+      navigation.setParams({ scanId: payload.id, createdAt: payload.createdAt });
+    }
+  }, [payload, addOrUpdateScanResult, navigation, currentScanId, currentCreatedAt]);
+
+  const handleOpenEdit = useCallback(() => {
+    setEditServingQuantity(
+      servingSizeState?.quantity != null && Number.isFinite(servingSizeState.quantity)
+        ? String(servingSizeState.quantity)
+        : ''
+    );
+    setEditServingUnit(servingSizeState?.unit ?? '');
+    setEditServingAltValue(
+      servingSizeAltState?.value != null && Number.isFinite(servingSizeAltState.value)
+        ? String(servingSizeAltState.value)
+        : ''
+    );
+    setEditServingAltUnit(servingSizeAltState?.unit ?? '');
+    setEditVisible(true);
+  }, [servingSizeState, servingSizeAltState]);
+
+  const handleSaveEdits = useCallback(() => {
+    setServingSizeState(() => {
+      const qty = parseFloat(editServingQuantity);
+      const hasQty = !Number.isNaN(qty) && qty > 0;
+      const unit = editServingUnit.trim();
+      if (hasQty || unit) {
+        return {
+          quantity: hasQty ? qty : undefined,
+          unit: unit || undefined,
+        };
+      }
+      return undefined;
+    });
+
+    setServingSizeAltState(() => {
+      const val = parseFloat(editServingAltValue);
+      const hasVal = !Number.isNaN(val) && val > 0;
+      const unit = editServingAltUnit.trim();
+      if (hasVal || unit) {
+        return {
+          value: hasVal ? val : undefined,
+          unit: unit || undefined,
+        };
+      }
+      return undefined;
+    });
+
+    setEditVisible(false);
+  }, [editServingQuantity, editServingUnit, editServingAltValue, editServingAltUnit]);
+
+  const handleComparePress = useCallback(() => {
+    const payload = buildScanResult();
+    if (!payload) {
+      Alert.alert('Missing price', 'Enter a valid price before comparing.');
+      return;
+    }
+    addOrUpdateScanResult(payload);
+    navigation.getParent()?.navigate('Compare', {
+      screen: 'HistoryScreen',
+      params: {
+        initialSelected: [payload.id],
+        autoSelectSecond: true,
+      },
+    });
+  }, [buildScanResult, addOrUpdateScanResult, navigation]);
 
   return (
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: 16 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Text style={{ fontSize: 18, fontWeight: '600' }}>Results</Text>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <Button title="Cut" onPress={() => setGoalMode('cut')} color={goalMode === 'cut' ? '#007aff' : undefined} />
-          <Button title="Bulk" onPress={() => setGoalMode('bulk')} color={goalMode === 'bulk' ? '#007aff' : undefined} />
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={{ fontSize: 18, fontWeight: '600' }}>Results</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Button title="Cut" onPress={() => setGoalMode('cut')} color={goalMode === 'cut' ? '#007aff' : undefined} />
+            <Button title="Bulk" onPress={() => setGoalMode('bulk')} color={goalMode === 'bulk' ? '#007aff' : undefined} />
+          </View>
         </View>
-      </View>
-      <View style={{ height: 16 }} />
-      {imageUri ? (
-        <Image source={{ uri: imageUri }} style={{ width: '100%', height: 180, backgroundColor: '#eee' }} />
-      ) : (
-        <View style={{ width: '100%', height: 180, backgroundColor: '#eee', alignItems: 'center', justifyContent: 'center' }}>
-          <Text>Image preview</Text>
+        <View style={{ height: 16 }} />
+        {imageUri ? (
+          <Image source={{ uri: imageUri }} style={{ width: '100%', height: 180, backgroundColor: '#eee' }} />
+        ) : (
+          <View style={{ width: '100%', height: 180, backgroundColor: '#eee', alignItems: 'center', justifyContent: 'center' }}>
+            <Text>Image preview</Text>
+          </View>
+        )}
+        <View style={{ height: 16 }} />
+        <Text>Price: {Number.isFinite(price) && price > 0 ? `$${price.toFixed(2)}` : '—'}</Text>
+        <View style={{ height: 8 }} />
+        <Text>Calories/$: {formatNumber(metrics.caloriesPerDollar)}</Text>
+        <Text>Protein/$: {formatNumber(metrics.proteinPerDollar)}</Text>
+        <Text>Cal/Protein: {Number.isFinite(metrics.caloriesPerProtein) ? metrics.caloriesPerProtein.toFixed(2) : '∞'}</Text>
+        <Text>Cost/Serving: {formatNumber(metrics.costPerServing)}</Text>
+        <Text>Meal multiplier: {mealMultiplier.toFixed(2)} servings/meal</Text>
+        <MealSlider value={mealMultiplier} min={1} max={5} step={0.25} onChange={setMealMultiplier} />
+        <Text>Meals/Container: {formatNumber(metrics.mealsPerContainer)}</Text>
+        <Text>Cost/Meal: {formatNumber(metrics.costPerMeal)}</Text>
+        {(servingSizeState || servingSizeAltState) ? (
+          <View style={{ marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: '#f8f9fb', borderWidth: 1, borderColor: '#d1d1d6' }}>
+            <Text style={{ fontWeight: '600', marginBottom: 6 }}>Serving size</Text>
+            {servingSizeState ? (
+              <Text>
+                {servingSizeState.quantity != null ? `${servingSizeState.quantity}` : '—'} {servingSizeState.unit ?? ''}
+              </Text>
+            ) : null}
+            {servingSizeAltState ? (
+              <Text>
+                {servingSizeAltState.value != null ? `${servingSizeAltState.value}` : '—'} {servingSizeAltState.unit ?? ''}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+        {(rawText || fieldReadings.length) ? (
+          <View style={{ marginTop: 16, gap: 8 }}>
+            {rawText ? (
+              <Button title="Show OCR debug" onPress={() => setShowDebug(true)} />
+            ) : null}
+            {fieldReadings.length ? (
+              <Button title="Show field confidences" onPress={() => setShowFields(true)} />
+            ) : null}
+          </View>
+        ) : null}
+        <View style={{ marginTop: 12, gap: 8 }}>
+          <Button title="Edit values" onPress={handleOpenEdit} />
+          <Button title="Compare" onPress={handleComparePress} />
         </View>
-      )}
-      <View style={{ height: 16 }} />
-      <Text>Price: ${price?.toFixed ? price.toFixed(2) : price}</Text>
-      <View style={{ height: 8 }} />
-      <Text>Calories/$: {metrics.caloriesPerDollar.toFixed(2)}</Text>
-      <Text>Protein/$: {metrics.proteinPerDollar.toFixed(2)}</Text>
-      <Text>Cal/Protein: {Number.isFinite(metrics.caloriesPerProtein) ? metrics.caloriesPerProtein.toFixed(2) : '∞'}</Text>
-      <Text>Cost/Serving: {metrics.costPerServing.toFixed(2)}</Text>
-      <Text>Meal multiplier: {mealMultiplier.toFixed(2)} servings/meal</Text>
-      <MealSlider value={mealMultiplier} min={1} max={5} step={0.25} onChange={setMealMultiplier} />
-      <Text>Meals/Container: {metrics.mealsPerContainer.toFixed(2)}</Text>
-      <Text>Cost/Meal: {Number.isFinite(metrics.costPerMeal) ? metrics.costPerMeal.toFixed(2) : '—'}</Text>
-      {servingSize || servingSizeAlt ? (
-        <View style={{ marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: '#f8f9fb', borderWidth: 1, borderColor: '#d1d1d6' }}>
-          <Text style={{ fontWeight: '600', marginBottom: 6 }}>Serving size</Text>
-          {servingSize ? (
-            <Text>
-              {servingSize.quantity != null ? `${servingSize.quantity}` : '—'} {servingSize.unit ?? ''}
-            </Text>
-          ) : null}
-          {servingSizeAlt ? (
-            <Text>
-              {servingSizeAlt.value != null ? `${servingSizeAlt.value}` : '—'} {servingSizeAlt.unit ?? ''}
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
-      {(rawText || fieldReadings.length) ? (
-        <View style={{ marginTop: 16, gap: 8 }}>
-          {rawText ? (
-            <Button title="Show OCR debug" onPress={() => setShowDebug(true)} />
-          ) : null}
-          {fieldReadings.length ? (
-            <Button title="Show field confidences" onPress={() => setShowFields(true)} />
-          ) : null}
-        </View>
-      ) : null}
-      <View style={{ marginTop: 12 }}>
-        <Button title="Edit values" onPress={() => setEditVisible(true)} />
-      </View>
       </ScrollView>
 
       <Modal visible={!!showDebug} transparent animationType="slide" onRequestClose={() => setShowDebug(false)}>
@@ -290,24 +441,60 @@ export default function ResultsScreen() {
             <ScrollView contentContainerStyle={{ gap: 8 }}>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                 <Text>Calories</Text>
-                <TextInput value={String(calories || '')} onChangeText={(t)=>setCalories(Number(t)||0)} keyboardType="number-pad" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 80, backgroundColor: '#fff' }} />
+                <TextInput
+                  value={calories != null ? String(calories) : ''}
+                  onChangeText={(t) => setCalories(t.trim() === '' ? undefined : Number(t))}
+                  keyboardType="number-pad"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 80, backgroundColor: '#fff' }}
+                />
                 <Text>Protein (g)</Text>
-                <TextInput value={String(proteinGrams || '')} onChangeText={(t)=>setProteinGrams(Number(t)||0)} keyboardType="number-pad" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 80, backgroundColor: '#fff' }} />
+                <TextInput
+                  value={proteinGrams != null ? String(proteinGrams) : ''}
+                  onChangeText={(t) => setProteinGrams(t.trim() === '' ? undefined : Number(t))}
+                  keyboardType="number-pad"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 80, backgroundColor: '#fff' }}
+                />
                 <Text>Servings</Text>
-                <TextInput value={String(servingsPerContainer || '')} onChangeText={(t)=>setServingsPerContainer(Number(t)||1)} keyboardType="decimal-pad" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 80, backgroundColor: '#fff' }} />
+                <TextInput
+                  value={servingsPerContainer != null ? String(servingsPerContainer) : ''}
+                  onChangeText={(t) => setServingsPerContainer(t.trim() === '' ? undefined : Number(t))}
+                  keyboardType="decimal-pad"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 80, backgroundColor: '#fff' }}
+                />
               </View>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                 <Text>Serving qty</Text>
-                <TextInput value={editServingQuantity} onChangeText={setEditServingQuantity} keyboardType="decimal-pad" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 70, backgroundColor: '#fff' }} />
+                <TextInput
+                  value={editServingQuantity}
+                  onChangeText={setEditServingQuantity}
+                  keyboardType="decimal-pad"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 70, backgroundColor: '#fff' }}
+                />
                 <Text>Unit</Text>
-                <TextInput value={editServingUnit} onChangeText={setEditServingUnit} style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 90, backgroundColor: '#fff' }} />
+                <TextInput
+                  value={editServingUnit}
+                  onChangeText={setEditServingUnit}
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 90, backgroundColor: '#fff' }}
+                />
                 <Text>Alt (g/ml)</Text>
-                <TextInput value={editServingAltValue} onChangeText={setEditServingAltValue} keyboardType="decimal-pad" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 80, backgroundColor: '#fff' }} />
+                <TextInput
+                  value={editServingAltValue}
+                  onChangeText={setEditServingAltValue}
+                  keyboardType="decimal-pad"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 80, backgroundColor: '#fff' }}
+                />
                 <Text>Alt unit</Text>
-                <TextInput value={editServingAltUnit} onChangeText={setEditServingAltUnit} style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 70, backgroundColor: '#fff' }} />
+                <TextInput
+                  value={editServingAltUnit}
+                  onChangeText={setEditServingAltUnit}
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, minWidth: 70, backgroundColor: '#fff' }}
+                />
               </View>
             </ScrollView>
-            <Button title="Done" onPress={() => setEditVisible(false)} />
+            <View style={{ marginTop: 12, gap: 8 }}>
+              <Button title="Save" onPress={handleSaveEdits} />
+              <Button title="Cancel" onPress={() => setEditVisible(false)} />
+            </View>
           </View>
         </View>
       </Modal>

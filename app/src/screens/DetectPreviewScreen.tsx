@@ -161,6 +161,8 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
       })),
       servingSize: servingSizePayload,
       servingSizeAlt: servingAltPayload,
+      scanId: route.params?.scanId,
+      createdAt: route.params?.createdAt,
     });
   };
 

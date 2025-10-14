@@ -32,10 +32,10 @@ Option A (Cloud form recognizer)
 - Cons: Requires network and per‑scan cost (¢1–10). Not aligned with our “offline first” and ad‑funded economics.
 
 Option B (On‑device tiny detector + ROI OCR) — Chosen
-- What we ship: A small quantized model (~3–8 MB) that directly detects three boxes: CaloriesValue, ProteinValue(g), ServingsPerContainer.
+- What we ship: A small quantized model (~3–8 MB) that directly detects key fields.
 - Flow: Detector runs offline → we crop exactly those boxes → run OCR only inside crops → compute metrics.
 - Pros: Fully offline, $0 per scan, stable across column layouts, noisy backgrounds, and perspective. Privacy‑preserving.
-- Cons: Requires a labeled dataset and a short training pipeline. Accuracy grows with diverse images.
+- Cons: Requires a labelled dataset and a short training pipeline. Accuracy grows with diverse images.
 
 Why B is better for our product:
 - Economics: Our ad model (~$0.01/5 scans) can’t afford cloud per‑scan fees.
@@ -46,7 +46,7 @@ Why B is better for our product:
 
 ## 3) Expected Accuracy and Data Needs
 
-- ~100 images (labeled with 3 boxes): Proof‑of‑concept; works on many “standard” labels.
+- ~100 images (labelled with 3 boxes): Proof‑of‑concept; works on many “standard” labels.
 - ~200–300 images: MVP; ~85–92% correct field localization on a diverse holdout set.
 - ~800–1000 images: Production‑grade; ~93–97% localization; remaining ~3–7% handled by a quick confirm.
 
@@ -59,28 +59,27 @@ Notes:
 ## 4) Implementation Plan
 
 Model & Inference (on‑device)
-- Detector: YOLOv8‑n / EfficientDet‑Lite0, INT8 TFLite export (~3–8 MB).
-- Labels: 3 classes → `CaloriesValue`, `ProteinValue`, `ServingsPerContainer`.
-- Post‑process: choose highest‑confidence boxes; apply basic sanity checks (grams only for protein; ignore %DV/mg).
-- OCR: ML Kit on the 2–3 small crops only → parse numbers → compute metrics.
+- Detector: YOLOv8‑n / EfficientDet‑Lite0 (current build: YOLOv8n float32 export with fused NMS).
+- Labels: 5 classes → `CaloriesValue`, `ProteinValue`, `ServingsPerContainer`, `ServingSizeQuantityUnit`, `ServingSizeAltGramsMl`.
+- Post‑process: choose highest‑confidence boxes; apply sanity checks (bounding-box size/aspect).
+- OCR: ML Kit on the 4–5 small crops only → parse numbers → compute metrics.
 
 Data & Training
-- Labeling spec: Draw one box per target field. No need to annotate entire tables.
-- Dataset targets: 200–300 images for MVP; 800–1000 for robustness.
-- Training: Free Colab works (slower, interrupted). A $20 day on a stable GPU accelerates iteration; accuracy depends on data, not paid vs free.
+- Labelling spec: Draw one box per target field. Dataset now at 125 labelled photos; target 200–300 for next training round.
+- Training: GitHub Actions workflow `export-tflite.yml` automates environment setup, YOLOv8 training, and TFLite export (float32, fused NMS). Colab notebooks kept for experimentation but no longer primary path.
 
 App Integration
-- Ship the TFLite model in the app bundle. No training data ships.
-- Add confidence gating: if any field is low‑confidence/missing, show a compact confirm UI (two fields) and continue offline.
-- Maintain the current gallery/camera capture UX.
+- Ship the TFLite model in the app bundle (`app/assets/models/nutri-detector-int8.tflite`).
+- Detector + OCR integrated in `DetectPreviewScreen` with manual override UI and confidence logging.
+- Results screen computes advanced metrics (including adjustable “meal” multiplier) and exposes confidence breakdown.
 
 ---
 
 ## 5) Why This Will Be Better
 
-- Stability: Directly locating the three fields removes the token‑graph randomness of generic OCR.
+- Stability: Directly locating the five fields removes the token‑graph randomness of generic OCR.
 - Offline + $0 per scan: Aligns with our ad‑funded model and poor‑signal conditions in stores.
-- Small footprint: +3–8 MB; fast inference (tens of ms); privacy‑preserving.
+- Small footprint: ~6 MB float32 model; fast inference (tens of ms); privacy‑preserving.
 - Evolvable: As we see misses, we add those examples to the dataset, retrain, and ship a small model update.
 
 ---
@@ -88,21 +87,29 @@ App Integration
 ## 6) Risks & Mitigations
 
 - Risk: Insufficient diversity → detector misses unusual templates.
-  - Mitigation: Curate images across brands, packaging (flat, curved), lighting; prioritize failure cases in labeling.
+  - Mitigation: Prioritise far-distance, angled, glare-heavy shots in next labelling batch; capture failure cases for relabel.
 
 - Risk: OCR still misreads in rare crops (O↔0, g↔9).
-  - Mitigation: Unit‑aware parsing, numeric sanity checks, and quick confirm panel on low confidence.
+  - Mitigation: Numeric normalisation already implemented; continue tuning heuristics and threshold per class.
 
 - Risk: Schedule slippage with free compute.
-  - Mitigation: Train in short epochs, checkpoint often; rent a $20 GPU day if we need to finalize quickly.
+  - Mitigation: GitHub Actions workflow ensures reproducible exports; rent short-term GPU only if iteration bottlenecks.
 
 ---
 
 ## 7) Acceptance Criteria (MVP Offline)
 
-- Detector finds all three fields on a mixed test set (≥200 photos) with ≥85–92% localization accuracy.
-- OCR on detected crops yields valid numbers in ≥90% of localized cases.
-- Low‑confidence fallback is a two‑field confirm that adds <10 seconds to flow.
-- Entire pipeline runs offline with no per‑scan cost.
+- Detector finds each class on a mixed validation set (≥200 photos) with ≥85–92% localisation accuracy.
+- OCR on detected crops yields valid numbers in ≥90% of localised cases.
+- Low-confidence fallback (Detect Preview manual inputs) adds <10 seconds to flow.
+- Entire pipeline runs offline with no per-scan cost.
+
+---
+
+## Addendum (Sept 27, 2025)
+
+- Current dataset: 125 labelled images (Drive archive). Detector integrated in app; confidence gating at 0.55.
+- GitHub Actions `export-tflite.yml` reliably produces float32 fused-NMS exports; latest artefact packaged as `nutri-detector-int8.tflite`.
+- Next steps: gather ~75 more diverse photos, rerun export, reassess threshold, and capture failure cases for targeted labelling.
 
 

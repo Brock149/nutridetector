@@ -1,222 +1,76 @@
-### Nutrition Scan App — Cursor Scaffolding + OCR Spike Checklist
+### Nutrition Scan App — Implementation Checklist (Sept 2025 Update)
 
-This is a step-by-step, copy/paste-friendly checklist to scaffold the app quickly, then move into live camera + OCR testing. It reflects the latest decisions:
+This checklist tracks what’s complete vs pending after pivoting to the on-device detector pipeline.
 
-- **Label OCR, not barcodes** (photo/scan the back nutrition label; parse via OCR)
-- **Bottom tabs only**: Scan, Compare, Account
-- **Results** is a screen reached from Scan (immediate) or via History/Compare, but is not in the tab bar
-- **Tokens** from ads, no backend; default grant can be hardcoded for v1
-- **Subscription** works offline using device time; optional light drift guard
-- **Goal modes**: Bulk/Cut toggle on Results affects metrics shown and color ratings
+Legend: ✅ done · 🟡 in progress · ⏳ not started
 
 ---
 
-### 0) Repo initialization
+### 0) Repo & Tooling
+- ✅ Expo Dev Client project initialised (`app/` workspace).
+- ✅ GitHub Actions `export-tflite.yml` trains + exports YOLOv8 → TFLite (fused NMS).
+- ✅ `metro.config.js` updated to bundle `.tflite` assets.
+- ✅ `TfliteReproScreen` for native bridge verification.
 
-- Use **Expo** with **Dev Client** (decided). No bare RN.
+### 1) Core Dependencies
+- ✅ Navigation (`@react-navigation/*`, gesture-handler, reanimated, screens, safe-area-context).
+- ✅ Imaging & OCR (`expo-camera`, `expo-image-picker`, `expo-image-manipulator`, `jpeg-js`, `react-native-fast-tflite`, `react-native-mlkit-ocr`).
+- 🟡 State/storage: React Context scaffolded for goal mode; tokens/subscription store still pending; SecureStore not wired.
 
-Notes:
-- Dev Client allows native modules for camera/OCR while keeping Expo DX.
+### 2) Navigation & Screens
+- ✅ Bottom tabs (Scan, Compare, Account) + stack navigation for results flow.
+- ✅ `ScanScreen` with camera/gallery capture + price prompt.
+- ✅ `DetectPreviewScreen` with detector overlay, confidence cards, manual override inputs.
+- ✅ `ResultsScreen` with metrics, meal multiplier slider, confidence modals, manual edit.
+- ⏳ `HistoryScreen` / `CompareScreen` (placeholder navigation only).
+- ⏳ `AccountScreen` (tokens/subscription actions not implemented).
 
----
+### 3) Detector & OCR Pipeline
+- ✅ On-device detector integration (`nutri-detector-int8.tflite`).
+- ✅ OCR on crops + parsing heuristics.
+- ✅ Confidence gating + manual override UI.
+- ✅ Logging for debugging (meta info, errors, preview data).
+- 🟡 Threshold tuning (currently 0.55; revisit after next training round).
+- 🟡 Dataset expansion (125 → target 200+ images) + retrain via GitHub workflow.
 
-### 1) Create project and base dependencies
+### 4) Metrics & UX Enhancements
+- ✅ Calories/$, protein/$, calories/protein, cost/serving metrics.
+- ✅ Meals/container & cost/meal with adjustable meal multiplier (1–5×, step 0.25).
+- ✅ Confidence breakdown modal + OCR debug modal.
+- ⏳ Goal-based colour ratings (Cut/Bulk).
+- ⏳ Save scan to history/compare from results.
 
-- Create Expo app + add Dev Client support
-- Install navigation:
-  - `@react-navigation/native`
-  - `@react-navigation/bottom-tabs`
-  - `@react-navigation/native-stack`
-  - Platform deps (gesture-handler, reanimated, screens, safe-area-context)
-- Install state + storage:
-  - State: **React Context** (Provider)
-  - Storage: **expo-secure-store** (no AsyncStorage)
-- Install camera + prep for OCR spike:
-  - Camera: **expo-camera** (initial capture path)
-  - OCR: start with a **mock function** returning sample values; later spike ML Kit / Apple Vision
+### 5) Tokens & Subscription Rails
+- ⏳ React Context store for tokens/subscription (with SecureStore persistence).
+- ⏳ Token gating: consume token per scan, watch-ad stub to earn tokens.
+- ⏳ Subscription state machine (active/expired/none), restore button stubs.
+- ⏳ Paywall surfaces on Scan/Compare when out of tokens or expired.
 
----
+### 6) History & Compare Workflows
+- ⏳ Persist last 3 scans (free tier) locally.
+- ⏳ Compare UI (side-by-side metrics, highlight better values).
+- ⏳ Premium unlock for larger history (documented only).
 
-### 2) Navigation scaffold (tabs + stacks)
+### 7) Camera UX Enhancements
+- 🟡 Future: live distance/alignment hints if detector confidence low.
+- ⏳ Optional crop/refine step only when needed (fallback UX not built yet).
 
-- Root contains a **Bottom Tab Navigator** with 3 tabs:
-  - `ScanTab` → stack: `ScanScreen`, `ResultsScreen`
-  - `CompareTab` → stack: `HistoryScreen`, `CompareScreen`, `ResultsScreen`
-  - `AccountTab` → stack: `AccountScreen`
-- Default landing route: `ScanScreen`
-- Ensure `ResultsScreen` is reachable but not a tab.
+### 8) Testing & QA
+- ✅ Fast-tflite repro confirms inference works (sync + async).
+- ✅ Manual device testing on Android dev build (Expo Dev Client).
+- 🟡 Expand automated lint/tests (none yet).
+- 🟡 Collect detector failure examples for retraining loop.
 
----
+### 9) Documentation & Ops
+- ✅ PRD, Detector Plan, Screens Breakdown updated (this pass).
+- ✅ Context docs note GitHub Actions workflow and dataset goals.
+- 🟡 Maintain living changelog / release notes before beta.
 
-### 3) Screen components to scaffold (empty first)
-
-- `ScanScreen`: camera preview, capture button, top bar shows tokens + subscription badge
-- `ResultsScreen`: thumbnail, metrics, Bulk/Cut toggle, color rating
-- `HistoryScreen`: show recent scans (free: last 3), select items
-- `CompareScreen`: side-by-side comparison of 2 items with emphasized better values
-- `AccountScreen`: token balance, subscription status, buttons: Watch Ad, Upgrade (IAP), Restore Purchases
-
----
-
-### 4) Global state + persistence
-
-- Create a lightweight store (**React Context**) for:
-  - `subscription_status`: `active | expired | none`
-  - `valid_until`: ISO string
-  - `last_verified`: ISO string
-  - `tokens`: number
-  - `goalMode`: `bulk | cut` (default: `cut`)
-- Persist to **SecureStore** on change and hydrate on app start.
-- Define storage keys upfront to avoid churn:
-  - `app/subscription_status`
-  - `app/valid_until`
-  - `app/last_verified`
-  - `app/tokens`
-  - `app/goal_mode`
-
----
-
-### 5) Token model (ads) — MVP
-
-- Hardcode default token grant per ad (e.g., `DEFAULT_TOKENS_PER_AD = 5`)
-- Define functions:
-  - `earnTokens(count: number)`
-  - `consumeToken()`
-  - `getTokenBalance()`
-- Gate scan start:
-  - If `subscription_status === active` → allow
-  - Else if `tokens > 0` → `consumeToken()` and allow
-  - Else → prompt to watch ad or subscribe
-- Integrate rewarded ads later; for now stub `watchAdAsync()` that calls `earnTokens(DEFAULT_TOKENS_PER_AD)`.
-
----
-
-### 6) Subscription model — MVP (offline first)
-
-- Purchase success flow (stub until IAP integration):
-  - Set `subscription_status = active`
-  - Set `valid_until = now + 30 days`
-  - Set `last_verified = now`
-- App launch check:
-  - If `now < valid_until` → `active`
-  - Else → `expired` and show renew/restore
-- Restore button (stub for now): sets state if validation succeeds later.
-- Optional light drift guard (no backend):
-  - If device time is unexpectedly behind `last_verified` by > 24h, show a soft warning; still honor `valid_until`.
-
----
-
-### 7) OCR spike (earliest live test)
-
-- Permissions: request camera permission on `ScanScreen` mount.
-- Capture path:
-  1) User taps capture → take still image (full label, no mandatory crop)
-  2) For v1 scaffold: call **mock OCR** to return calories/protein; later replace with real OCR
-  3) If OCR confidence below threshold → offer optional crop/refine flow
-  4) Prompt for price ($) after OCR, before results
-- Minimal parsing targets for v1 metrics:
-  - Calories (per serving)
-  - Protein grams (per serving)
-  - Serving size (optional for v1 if not needed for ratios)
-- Compute and display:
-  - `caloriesPerDollar = calories / price`
-  - `proteinPerDollar = proteinGrams / price`
-  - `proteinPerCalorie = proteinGrams / calories`
-- Show `ResultsScreen` with:
-  - Image thumbnail
-  - Metrics above
-  - Goal toggle: **Bulk | Cut** (top)
-  - Color-coded rating thresholds depend on goal mode (keep simple, adjustable constants)
-
----
-
-### 8) History/Compare — MVP
-
-- Save each completed result (thumbnail uri, parsed fields, metrics, timestamp, optional title)
-- Free users: keep the last **3** items locally
-- Compare flow:
-  - Select up to 2 items → `CompareScreen`
-  - Side-by-side metrics, highlight better column per metric
-
----
-
-### 9) UI copy and states (MVP)
-
-- Empty states:
-  - No tokens left → prompt Watch Ad or Subscribe
-  - Subscription expired → Renew or Restore
-  - History empty → prompt to scan
-- Price prompt: numeric keypad; must enter to proceed to results
-- Top bar badges:
-  - Tokens: `🔑 {n} tokens`
-  - Subscription: `⭐ Unlimited` when active
-
----
-
-### 10) Acceptance criteria (MVP slice)
-
-- Tabs render: Scan (default), Compare, Account
-- Camera permission and preview work; capture returns an image
-- OCR returns text; app parses calories and protein in a happy path label
-- Price entry prompt appears post-OCR and gating logic works (tokens/subscription)
-- Results screen calculates and displays 3 metrics; color ratings change with Bulk/Cut
-- History stores up to 3 items (free); Compare shows two items side-by-side
-- State persists across app restarts (tokens, subscription fields, goal mode)
-
----
-
-### 11) Nice-to-haves (post-MVP or later in MVP)
-
-- Local configurable override for default token grant (read from AsyncStorage if set)
-- Simple crop/refine UI when OCR confidence is low
-- Basic heuristics to parse labels more robustly (US FDA format first)
-- Minimal theming support for color scales per goal
-
----
-
-### 12) Work plan (suggested order)
-
-1) Scaffold project + navigation (tabs + stacks)
-2) Add global store + persistence for tokens/subscription/goal mode
-3) Implement gating logic (tokens/subscription) with stubbed ad + IAP actions
-4) Wire camera preview and capture on `ScanScreen`
-5) Integrate OCR and parse calories/protein (full-image first)
-6) Add price prompt and navigate to `ResultsScreen`
-7) Compute metrics, render ratings with Bulk/Cut toggle
-8) Save results to history and build Compare view
-9) Polish states (empty/expired/no-tokens) and persistence
-10) Prepare for live device testing on both platforms
-
----
-
-### 13) Implementation notes (to reference while coding)
-
-- Keep constants together (thresholds, colors, defaults): `constants/metrics.ts`
-- Data shapes:
-  - ScanResult: `{ id, imageUri, calories, proteinGrams, price, metrics, createdAt }`
-  - Metrics: `{ caloriesPerDollar, proteinPerDollar, proteinPerCalorie }`
-- Keep OCR parsing modular so we can iterate on regex/heuristics per locale
-- Favor early returns and predictable state updates; persist after each meaningful change
-
----
-
-### 14) Risks and mitigations
-
-- OCR variability across labels → start with common US FDA layout; add fallback manual inputs if needed
-- Expo vs native module compatibility → use Expo Dev Client if staying in Expo; otherwise Bare RN
-- Store review for subscriptions → ensure restore button is present; clear offline behavior
-
----
-
-### 15) Dev workflow (Expo Dev Client by default)
-
-- Primary: **Development Build (Dev Client)** for live camera + future OCR (ML Kit / Apple Vision)
-- Commands:
-  - `npm run android` → builds/installs dev client and opens Android
-  - `npm run ios` → builds/installs dev client and opens iOS (on macOS)
-  - `npm start` → start server with `--dev-client` and attach to installed build
-- Optional: **Expo Go** for quick UI-only iteration
-  - `npx expo start` then press `s` to switch to Expo Go
-  - Limitations: no native OCR
+### 10) Next Priorities
+1. Label additional photos (hard cases: farther distance, angled shots, glare) → rerun GitHub export → integrate new model.
+2. Implement tokens/subscription storage & gating to align with original MVP economic model.
+3. Build history & compare experiences to support “value shopping” use case.
+4. Add goal-mode colour ratings + quick “Add to compare” action on results.
+5. Evaluate camera guidance once new data is in (if far-shot accuracy still low).
 
 

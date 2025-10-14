@@ -1,7 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { View, Text, Button, Alert, TextInput, Modal, TouchableOpacity } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { runMockOcrAsync } from '../utils/mockOcr';
 import { runOcrAndParse } from '../utils/ocr';
 import { useApp } from '../context/AppContext';
@@ -9,6 +9,9 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 
 export default function ScanScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
+  const compareSourceId = route.params?.compareSourceId as string | undefined;
+  const compareSourceCreatedAt = route.params?.compareSourceCreatedAt as string | undefined;
   const { consumeToken, subscriptionStatus, tokens } = useApp();
   const [price, setPrice] = useState('');
   const [showPrice, setShowPrice] = useState(false);
@@ -71,7 +74,14 @@ export default function ScanScreen() {
       return;
     }
     // Go to detector preview; it will visualize boxes and continue to results
-    navigation.navigate('DetectPreview', { imageUri, price: p, originalWidth: imageDims?.width ?? null, originalHeight: imageDims?.height ?? null });
+    navigation.navigate('DetectPreview', {
+      imageUri,
+      price: p,
+      originalWidth: imageDims?.width ?? null,
+      originalHeight: imageDims?.height ?? null,
+      scanId: compareSourceId,
+      createdAt: compareSourceCreatedAt,
+    });
     setShowPrice(false);
     setPrice('');
   }, [price, navigation, imageUri, parsedCalories, parsedProtein, parsedServings, parsedRawText]);
