@@ -14,10 +14,10 @@ export default function AccountScreen() {
       <Text style={{ marginBottom: 8 }}>Token balance: {tokens}</Text>
       <Text style={{ marginBottom: 16 }}>Subscription: {subscriptionStatus}</Text>
 
-      {__DEV__ && (
+      {(tokens === 0 || __DEV__) && (
         <View style={{ gap: 8 }}>
           <Button title="Add +5 Test Tokens" onPress={() => earnTokens(5)} />
-          <Button title="Open TFLite Repro" onPress={() => navigation.navigate('TfliteRepro')} />
+          {__DEV__ && <Button title="Open TFLite Repro" onPress={() => navigation.navigate('TfliteRepro')} />}
         </View>
       )}
     </View>

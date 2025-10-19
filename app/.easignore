@@ -1,0 +1,17 @@
+# Temporary build outputs
+android/app/build
+android/build
+android/.gradle
+android/.idea
+
+# Local development files
+.expo
+.expo-shared
+npm-debug.log
+yarn-error.log
+
+# Large assets/data not required for build
+raw_photos/
+ContextDocuments/
+trainingDocuments/
+

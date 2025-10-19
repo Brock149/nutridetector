@@ -2,7 +2,7 @@
   "expo": {
     "name": "app",
     "slug": "app",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -13,7 +13,16 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "com.broco.cutly",
+      "buildNumber": "1.0.1",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "We use the camera to scan nutrition labels.",
+        "NSPhotoLibraryUsageDescription": "We access photos when you import label images."
+      },
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.broco.nutritionapp",
@@ -31,8 +40,12 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-secure-store",
-      
-    ]
+      "expo-secure-store"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "7fdfbeeb-b232-4e7b-97d2-1fa98bb5910c"
+      }
+    }
   }
 }
