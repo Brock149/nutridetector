@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import * as SecureStore from 'expo-secure-store';
+import { SUBSCRIPTION_PRODUCTS, SubscriptionProductId } from '../constants/subscriptions';
 
 type SubscriptionStatus = 'active' | 'expired' | 'none';
 type GoalMode = 'bulk' | 'cut';
@@ -42,13 +43,27 @@ type AppState = {
   subscriptionStatus: SubscriptionStatus;
   validUntil: string | null;
   lastVerified: string | null;
+  subscriptionProductId: SubscriptionProductId | null;
+  latestReceipt: string | null;
   tokens: number;
   goalMode: GoalMode;
   history: ScanResult[];
 };
 
 type AppContextType = AppState & {
-  setSubscription: (status: SubscriptionStatus, validUntil: string | null) => void;
+  setSubscription: (payload: {
+    status: SubscriptionStatus;
+    productId: SubscriptionProductId | null;
+    validUntil: string | null;
+    receipt?: string | null;
+    lastVerified?: string | null;
+  }) => void;
+  markSubscriptionFromPurchase: (options: {
+    productId: SubscriptionProductId;
+    purchaseTime: number;
+    receipt?: string | null;
+  }) => void;
+  clearSubscription: () => void;
   setLastVerified: (iso: string) => void;
   earnTokens: (count: number) => void;
   consumeToken: () => boolean;
@@ -62,6 +77,8 @@ const DEFAULT_STATE: AppState = {
   subscriptionStatus: 'none',
   validUntil: null,
   lastVerified: null,
+  subscriptionProductId: null,
+  latestReceipt: null,
   tokens: 0,
   goalMode: 'cut',
   history: [],
@@ -71,6 +88,8 @@ const STORAGE_KEYS = {
   subscriptionStatus: 'app/subscription_status',
   validUntil: 'app/valid_until',
   lastVerified: 'app/last_verified',
+  subscriptionProductId: 'app/subscription_product_id',
+  latestReceipt: 'app/subscription_receipt',
   tokens: 'app/tokens',
   goalMode: 'app/goal_mode',
   history: 'app/history',
@@ -156,10 +175,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     (async () => {
-      const [subscriptionStatus, validUntil, lastVerified, tokens, goalMode, historyRaw] = await Promise.all([
+      const [subscriptionStatus, validUntil, lastVerified, subscriptionProductId, latestReceipt, tokens, goalMode, historyRaw] =
+        await Promise.all([
         SecureStore.getItemAsync(STORAGE_KEYS.subscriptionStatus),
         SecureStore.getItemAsync(STORAGE_KEYS.validUntil),
         SecureStore.getItemAsync(STORAGE_KEYS.lastVerified),
+          SecureStore.getItemAsync(STORAGE_KEYS.subscriptionProductId),
+          SecureStore.getItemAsync(STORAGE_KEYS.latestReceipt),
         SecureStore.getItemAsync(STORAGE_KEYS.tokens),
         SecureStore.getItemAsync(STORAGE_KEYS.goalMode),
         SecureStore.getItemAsync(STORAGE_KEYS.history),
@@ -169,6 +191,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         subscriptionStatus: (subscriptionStatus as SubscriptionStatus) || DEFAULT_STATE.subscriptionStatus,
         validUntil: validUntil || DEFAULT_STATE.validUntil,
         lastVerified: lastVerified || DEFAULT_STATE.lastVerified,
+        subscriptionProductId: (subscriptionProductId as SubscriptionProductId | null) ?? DEFAULT_STATE.subscriptionProductId,
+        latestReceipt: latestReceipt || DEFAULT_STATE.latestReceipt,
         tokens: tokens ? Number(tokens) : DEFAULT_STATE.tokens,
         goalMode: sanitizeGoalMode(goalMode),
         history: parseHistory(historyRaw),
@@ -179,16 +203,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     if (!hydrated) return;
+    setState((prev) => {
+      if (prev.validUntil) {
+        const expiryMs = new Date(prev.validUntil).getTime();
+        if (Number.isFinite(expiryMs) && expiryMs < Date.now()) {
+          if (prev.subscriptionStatus === 'active') {
+            return { ...prev, subscriptionStatus: 'expired' };
+          }
+        } else if (Number.isFinite(expiryMs) && expiryMs >= Date.now() && prev.subscriptionStatus === 'expired') {
+          return { ...prev, subscriptionStatus: 'active' };
+        }
+      }
+      return prev;
+    });
+  }, [state.validUntil, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
     SecureStore.setItemAsync(STORAGE_KEYS.subscriptionStatus, state.subscriptionStatus);
     SecureStore.setItemAsync(STORAGE_KEYS.validUntil, state.validUntil ?? '');
     SecureStore.setItemAsync(STORAGE_KEYS.lastVerified, state.lastVerified ?? '');
+    SecureStore.setItemAsync(STORAGE_KEYS.subscriptionProductId, state.subscriptionProductId ?? '');
+    SecureStore.setItemAsync(STORAGE_KEYS.latestReceipt, state.latestReceipt ?? '');
     SecureStore.setItemAsync(STORAGE_KEYS.tokens, String(state.tokens));
     SecureStore.setItemAsync(STORAGE_KEYS.goalMode, state.goalMode);
     SecureStore.setItemAsync(STORAGE_KEYS.history, JSON.stringify(state.history));
   }, [state, hydrated]);
 
-  const setSubscription = useCallback((status: SubscriptionStatus, validUntil: string | null) => {
-    setState((prev) => ({ ...prev, subscriptionStatus: status, validUntil }));
+  const setSubscription = useCallback(
+    (payload: { status: SubscriptionStatus; validUntil: string | null; productId: SubscriptionProductId | null; receipt?: string | null; lastVerified?: string | null }) => {
+      setState((prev) => ({
+        ...prev,
+        subscriptionStatus: payload.status,
+        validUntil: payload.validUntil,
+        subscriptionProductId: payload.productId,
+        latestReceipt: payload.receipt ?? prev.latestReceipt,
+        lastVerified: payload.lastVerified ?? prev.lastVerified,
+      }));
+    },
+    []
+  );
+
+  const markSubscriptionFromPurchase = useCallback(
+    ({ productId, purchaseTime, receipt }: { productId: SubscriptionProductId; purchaseTime: number; receipt?: string | null }) => {
+      const meta = SUBSCRIPTION_PRODUCTS.find((item) => item.productId === productId);
+      const now = Date.now();
+      const purchaseMs = Number.isFinite(purchaseTime) ? purchaseTime : now;
+      const durationMs = (meta?.durationDays ?? 30) * 24 * 60 * 60 * 1000;
+      const validUntilIso = new Date(purchaseMs + durationMs).toISOString();
+      setState((prev) => ({
+        ...prev,
+        subscriptionStatus: 'active',
+        validUntil: validUntilIso,
+        subscriptionProductId: productId,
+        latestReceipt: receipt ?? prev.latestReceipt,
+        lastVerified: new Date().toISOString(),
+      }));
+    },
+    []
+  );
+
+  const clearSubscription = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      subscriptionStatus: 'none',
+      validUntil: null,
+      subscriptionProductId: null,
+      latestReceipt: null,
+    }));
   }, []);
 
   const setLastVerified = useCallback((iso: string) => {
@@ -242,6 +324,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     () => ({
       ...state,
       setSubscription,
+      markSubscriptionFromPurchase,
+      clearSubscription,
       setLastVerified,
       earnTokens,
       consumeToken,
@@ -250,7 +334,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       removeScanResult,
       clearHistory,
     }),
-    [state, setSubscription, setLastVerified, earnTokens, consumeToken, setGoalMode, addOrUpdateScanResult, removeScanResult, clearHistory]
+    [state, setSubscription, markSubscriptionFromPurchase, clearSubscription, setLastVerified, earnTokens, consumeToken, setGoalMode, addOrUpdateScanResult, removeScanResult, clearHistory]
   );
 
   return <AppContext.Provider value={api}>{children}</AppContext.Provider>;
