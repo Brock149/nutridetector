@@ -1,4 +1,4 @@
-### On-Device Detector Plan (Option B)
+wor### On-Device Detector Plan (Option B)
 
 **Status (Sept 27, 2025):** Detector + OCR pipeline is integrated in-app. Current dataset size: 125 labelled photos (YOLO format). Latest model: `nutri-detector-int8.tflite` (float32 inference, fused NMS `[1,300,6]`). Additional labelling + retraining planned.
 

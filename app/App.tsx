@@ -16,9 +16,35 @@ const ScanStack = createNativeStackNavigator();
 const CompareStack = createNativeStackNavigator();
 const AccountStack = createNativeStackNavigator();
 
+const BRAND_SLATE = '#0b1917';
+const PANEL_SLATE = '#102624';
+const BRAND_MINT = '#2cd0b1';
+const TEXT_PRIMARY = '#f6fffb';
+const TEXT_MUTED = 'rgba(246,255,251,0.6)';
+
+const navigationTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: BRAND_SLATE,
+    card: PANEL_SLATE,
+    text: TEXT_PRIMARY,
+    border: 'rgba(255,255,255,0.08)',
+    primary: BRAND_MINT,
+  },
+};
+
+const stackScreenOptions = {
+  headerStyle: { backgroundColor: PANEL_SLATE },
+  headerTintColor: TEXT_PRIMARY,
+  headerTitleStyle: { fontWeight: '700' as const, letterSpacing: 0.2 },
+  headerShadowVisible: false,
+  headerBackTitleVisible: false,
+};
+
 function ScanStackNavigator() {
   return (
-    <ScanStack.Navigator>
+    <ScanStack.Navigator screenOptions={stackScreenOptions}>
       <ScanStack.Screen name="ScanScreen" component={ScanScreen} options={{ title: 'Scan' }} />
       <ScanStack.Screen name="DetectPreview" component={DetectPreviewScreen} options={{ title: 'Detect' }} />
       <ScanStack.Screen name="ResultsScreen" component={ResultsScreen} options={{ title: 'Results' }} />
@@ -28,7 +54,7 @@ function ScanStackNavigator() {
 
 function CompareStackNavigator() {
   return (
-    <CompareStack.Navigator>
+    <CompareStack.Navigator screenOptions={stackScreenOptions}>
       <CompareStack.Screen name="HistoryScreen" component={HistoryScreen} options={{ title: 'History' }} />
       <CompareStack.Screen name="CompareScreen" component={CompareScreen} options={{ title: 'Compare' }} />
       <CompareStack.Screen name="ResultsScreen" component={ResultsScreen} options={{ title: 'Results' }} />
@@ -38,7 +64,7 @@ function CompareStackNavigator() {
 
 function AccountStackNavigator() {
   return (
-    <AccountStack.Navigator>
+    <AccountStack.Navigator screenOptions={stackScreenOptions}>
       <AccountStack.Screen name="AccountScreen" component={AccountScreen} options={{ title: 'Account' }} />
       <AccountStack.Screen name="TfliteRepro" component={TfliteReproScreen} options={{ title: 'TFLite Repro' }} />
     </AccountStack.Navigator>
@@ -48,8 +74,22 @@ function AccountStackNavigator() {
 export default function App() {
   return (
     <AppProvider>
-      <NavigationContainer theme={DefaultTheme}>
-        <Tab.Navigator screenOptions={{ headerShown: false }}>
+      <NavigationContainer theme={navigationTheme}>
+        <Tab.Navigator
+          screenOptions={{
+            headerShown: false,
+            tabBarStyle: {
+              backgroundColor: PANEL_SLATE,
+              borderTopColor: 'rgba(255,255,255,0.08)',
+              paddingVertical: 6,
+              height: 64,
+            },
+            tabBarActiveTintColor: BRAND_MINT,
+            tabBarInactiveTintColor: TEXT_MUTED,
+            tabBarLabelStyle: { fontWeight: '600', fontSize: 12 },
+            tabBarIconStyle: { display: 'none' },
+          }}
+        >
           <Tab.Screen name="Scan" component={ScanStackNavigator} />
           <Tab.Screen name="Compare" component={CompareStackNavigator} />
           <Tab.Screen name="Account" component={AccountStackNavigator} />

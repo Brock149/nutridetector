@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { SUBSCRIPTION_PRODUCTS, SubscriptionProductId } from '../constants/subscriptions';
 import type { SubscriptionProductInfo } from '../services/subscriptionService';
 import {
@@ -21,14 +21,42 @@ import {
   restoreSubscriptions,
   subscribeToPurchaseUpdates,
 } from '../services/subscriptionService';
+import { LinearGradient } from 'expo-linear-gradient';
+
+const BRAND_SLATE = '#0b1917';
+const PANEL_SLATE = '#10201d';
+const CARD_OVERLAY = 'rgba(22,49,45,0.72)';
+const CARD_BORDER = 'rgba(255,255,255,0.08)';
+const TEXT_PRIMARY = '#f6fffb';
+const TEXT_MUTED = 'rgba(246,255,251,0.65)';
+const TEXT_SOFT = 'rgba(246,255,251,0.45)';
+const BRAND_MINT = '#2cd0b1';
+const BRAND_MINT_SOFT = 'rgba(44,208,177,0.18)';
+const DANGER_BG = 'rgba(255,86,94,0.18)';
+const DANGER_BORDER = 'rgba(255,86,94,0.32)';
+const DANGER_TEXT = '#ff9a9a';
+const TOKEN_CAP = 20;
+const FREE_CLAIM_AMOUNT = 10;
+const FREE_CLAIM_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 
 export default function AccountScreen() {
-  const { tokens, subscriptionStatus, earnTokens, subscriptionProductId, validUntil, markSubscriptionFromPurchase, clearSubscription } = useApp();
-  const navigation = useNavigation<any>();
+  const {
+    tokens,
+    subscriptionStatus,
+    subscriptionProductId,
+    validUntil,
+    markSubscriptionFromPurchase,
+    clearSubscription,
+    lastFreeClaim,
+    claimFreeTokens,
+    setSubscription,
+    setLastVerified,
+  } = useApp();
   const [loading, setLoading] = useState(false);
   const [products, setProducts] = useState<SubscriptionProductInfo[]>([]);
   const [initialised, setInitialised] = useState(false);
-  const [showDevTools, setShowDevTools] = useState(false);
+  const lastRestoreRef = useRef<number>(0);
 
 type UiProduct = (typeof SUBSCRIPTION_PRODUCTS)[number] & {
   localizedTitle: string;
@@ -74,6 +102,41 @@ type UiProduct = (typeof SUBSCRIPTION_PRODUCTS)[number] & {
       disconnectIap().catch(() => undefined);
     };
   }, [markSubscriptionFromPurchase]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      const syncEntitlement = async () => {
+        if (!initialised) return;
+        const now = Date.now();
+        const INTERVAL_MS = 15 * 60 * 1000;
+        const shouldRefresh = now - lastRestoreRef.current >= INTERVAL_MS || subscriptionStatus !== 'active';
+        if (!shouldRefresh) return;
+        try {
+          const purchases = await restoreSubscriptions();
+          if (cancelled) return;
+          lastRestoreRef.current = now;
+          if (purchases.length) {
+            const latest = purchases.sort((a, b) => b.purchaseTime - a.purchaseTime)[0];
+            markSubscriptionFromPurchase(latest);
+          } else if (subscriptionStatus === 'active') {
+            const verifiedIso = new Date(now).toISOString();
+            setSubscription({ status: 'expired', validUntil: null, productId: null, lastVerified: verifiedIso, receipt: null });
+          } else {
+            setLastVerified(new Date(now).toISOString());
+          }
+        } catch (err) {
+          if (!cancelled) {
+            console.warn('Auto restore check failed', err);
+          }
+        }
+      };
+      syncEntitlement();
+      return () => {
+        cancelled = true;
+      };
+    }, [initialised, subscriptionStatus, markSubscriptionFromPurchase, setSubscription, setLastVerified, restoreSubscriptions])
+  );
 
   const uiProducts = useMemo<UiProduct[]>(() => {
     return SUBSCRIPTION_PRODUCTS.map((meta) => {
@@ -131,94 +194,121 @@ type UiProduct = (typeof SUBSCRIPTION_PRODUCTS)[number] & {
     return 'None';
   }, [subscriptionStatus, validUntil]);
 
+  const claimStatus = useMemo(() => {
+    if (tokens >= TOKEN_CAP) {
+      return { canClaim: false, label: 'Wallet full — spend tokens to claim more.' };
+    }
+    const now = Date.now();
+    if (!lastFreeClaim) {
+      return { canClaim: true, label: `Claim ${FREE_CLAIM_AMOUNT} free scan tokens right now.` };
+    }
+    const lastMs = new Date(lastFreeClaim).getTime();
+    if (!Number.isFinite(lastMs) || now - lastMs >= FREE_CLAIM_INTERVAL_MS) {
+      return { canClaim: true, label: `Claim ${FREE_CLAIM_AMOUNT} free scan tokens right now.` };
+    }
+    const remaining = FREE_CLAIM_INTERVAL_MS - (now - lastMs);
+    const hours = Math.floor(remaining / (60 * 60 * 1000));
+    const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000));
+    const parts: string[] = [];
+    if (hours > 0) parts.push(`${hours}h`);
+    parts.push(`${minutes}m`);
+    return { canClaim: false, label: `Next refill in ${parts.join(' ')}` };
+  }, [tokens, lastFreeClaim]);
+
+  const { canClaim: canClaimTokens, label: claimLabel } = claimStatus;
+
+  const handleClaimFreeTokens = useCallback(async () => {
+    if (!canClaimTokens) return;
+    const claimed = await claimFreeTokens();
+    if (claimed) {
+      Alert.alert('Free tokens added', `+${FREE_CLAIM_AMOUNT} scan tokens have been added to your wallet.`);
+    }
+  }, [canClaimTokens, claimFreeTokens]);
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-        <View style={styles.headerRow}>
-          <View>
-            <Text style={styles.title}>Account</Text>
-            <Text style={styles.subtitle}>Manage your plan and tokens</Text>
-          </View>
-          {__DEV__ && (
-            <TouchableOpacity
-              onPress={() => setShowDevTools((prev) => !prev)}
-              style={[styles.devToggle, showDevTools && styles.devToggleActive]}
-            >
-              <Text style={[styles.devToggleLabel, showDevTools && styles.devToggleLabelActive]}>
-                {showDevTools ? 'Hide' : 'Show'} dev tools
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Status</Text>
-          <View style={styles.statRow}>
+    <LinearGradient colors={[BRAND_SLATE, PANEL_SLATE]} style={styles.gradient}>
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+          <View style={styles.headerRow}>
             <View>
-              <Text style={styles.statLabel}>Token balance</Text>
-              <Text style={styles.statValue}>{tokens}</Text>
-            </View>
-            <View>
-              <Text style={styles.statLabel}>Subscription</Text>
-              <Text style={styles.statValue}>{statusLine}</Text>
+              <Text style={styles.title}>Account</Text>
+              <Text style={styles.subtitle}>Manage your plan and tokens</Text>
             </View>
           </View>
-          {subscriptionProductId ? (
-            <Text style={styles.planBadge}>Current plan: {subscriptionProductId}</Text>
-          ) : null}
-          {loading ? (
-            <View style={styles.loaderRow}>
-              <ActivityIndicator size="small" color="rgba(0,0,0,0.4)" />
-              <Text style={styles.loaderText}>Talking to the store…</Text>
-            </View>
-          ) : null}
-        </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Upgrade</Text>
-          <Text style={styles.sectionDescription}>Unlock unlimited scans with one of the plans below.</Text>
-          {uiProducts.map((item) => {
-            const isActive = subscriptionProductId === item.productId;
-            return (
-              <View key={item.productId} style={[styles.productCard, isActive && styles.productCardActive]}>
-                <View style={styles.productHeader}>
-                  <Text style={styles.productTitle}>{item.localizedTitle}</Text>
-                  <Text style={styles.productPrice}>{item.priceLabel}</Text>
-                </View>
-                <Text style={styles.productDescription}>{item.localizedDescription}</Text>
-                <AccountButton
-                  label={isActive ? 'Manage (Device Settings)' : 'Subscribe'}
-                  onPress={() => handleSubscribe(item.productId)}
-                  disabled={!initialised || isActive}
-                  tone={isActive ? 'outline' : 'primary'}
-                />
-              </View>
-            );
-          })}
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Manage</Text>
-          <Text style={styles.sectionDescription}>Restore an existing purchase or clear the local subscription state.</Text>
-          <AccountButton
-            label="Restore Purchases"
-            onPress={handleRestore}
-            disabled={!initialised}
-            tone="secondary"
-          />
-          <AccountButton label="Remove Subscription" onPress={handleSignOut} tone="danger" />
-        </View>
-
-        {__DEV__ && showDevTools && (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Developer Tools</Text>
-            <Text style={styles.sectionDescription}>Quick helpers for local testing.</Text>
-            <AccountButton label="Add +5 Test Tokens" onPress={() => earnTokens(5)} tone="ghost" />
-            <AccountButton label="Open TFLite Repro" onPress={() => navigation.navigate('TfliteRepro')} tone="ghost" />
+              <Text style={styles.sectionTitle}>Status</Text>
+              <View style={styles.statRow}>
+                <View>
+                  <Text style={styles.statLabel}>Token balance</Text>
+                  <Text style={styles.statValue}>{tokens}</Text>
+                </View>
+                <View>
+                  <Text style={styles.statLabel}>Subscription</Text>
+                  <Text style={styles.statValue}>{statusLine}</Text>
+                </View>
+              </View>
+              {subscriptionProductId ? (
+                <Text style={styles.planBadge}>Current plan: {subscriptionProductId}</Text>
+              ) : null}
+              {loading ? (
+                <View style={styles.loaderRow}>
+                  <ActivityIndicator size="small" color={BRAND_MINT} />
+                  <Text style={styles.loaderText}>Talking to the store…</Text>
+                </View>
+              ) : null}
+              <View style={styles.claimBlock}>
+                <Text style={styles.claimTitle}>Daily refill</Text>
+                <Text style={styles.claimSubtitle}>{claimLabel}</Text>
+                <Text style={styles.claimWalletNote}>Wallet holds up to {TOKEN_CAP} tokens.</Text>
+                <View style={styles.claimButtonWrapper}>
+                  <AccountButton
+                    label={`Claim +${FREE_CLAIM_AMOUNT}`}
+                    onPress={handleClaimFreeTokens}
+                    disabled={!canClaimTokens}
+                  />
+                </View>
+              </View>
+            </View>
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Upgrade</Text>
+            <Text style={styles.sectionDescription}>Unlock unlimited scans with one of the plans below.</Text>
+            {uiProducts.map((item) => {
+              const isActive = subscriptionProductId === item.productId;
+              return (
+                <View key={item.productId} style={[styles.productCard, isActive && styles.productCardActive]}>
+                  <View style={styles.productHeader}>
+                    <Text style={styles.productTitle}>{item.localizedTitle}</Text>
+                    <Text style={styles.productPrice}>{item.priceLabel}</Text>
+                  </View>
+                  <Text style={styles.productDescription}>{item.localizedDescription}</Text>
+                  <AccountButton
+                    label={isActive ? 'Manage (Device Settings)' : 'Subscribe'}
+                    onPress={() => handleSubscribe(item.productId)}
+                    disabled={!initialised || isActive}
+                    tone={isActive ? 'outline' : 'primary'}
+                  />
+                </View>
+              );
+            })}
           </View>
-        )}
-      </ScrollView>
-    </SafeAreaView>
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Manage</Text>
+            <Text style={styles.sectionDescription}>Restore an existing purchase or clear the local subscription state.</Text>
+            <AccountButton
+              label="Restore Purchases"
+              onPress={handleRestore}
+              disabled={!initialised}
+              tone="secondary"
+            />
+          <AccountButton label="Clear Local Access" onPress={handleSignOut} tone="danger" />
+          </View>
+
+        </ScrollView>
+      </SafeAreaView>
+    </LinearGradient>
   );
 }
 
@@ -233,7 +323,7 @@ type AccountButtonProps = {
 function AccountButton({ label, onPress, disabled, tone = 'primary' }: AccountButtonProps) {
   return (
     <TouchableOpacity
-      activeOpacity={0.8}
+      activeOpacity={0.85}
       onPress={onPress}
       disabled={disabled}
       style={[
@@ -249,7 +339,9 @@ function AccountButton({ label, onPress, disabled, tone = 'primary' }: AccountBu
       <Text
         style={[
           styles.buttonLabel,
+          tone === 'secondary' && styles.buttonLabelSecondary,
           tone === 'outline' && styles.buttonLabelOutline,
+          tone === 'danger' && styles.buttonLabelDanger,
           tone === 'ghost' && styles.buttonLabelGhost,
         ]}
       >
@@ -260,9 +352,12 @@ function AccountButton({ label, onPress, disabled, tone = 'primary' }: AccountBu
 }
 
 const styles = StyleSheet.create({
+  gradient: {
+    flex: 1,
+  },
   safeArea: {
     flex: 1,
-    backgroundColor: '#f2f2f7',
+    backgroundColor: 'transparent',
   },
   scroll: {
     flex: 1,
@@ -270,178 +365,201 @@ const styles = StyleSheet.create({
   content: {
     padding: 20,
     paddingBottom: 40,
+    gap: 24,
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
   },
   title: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#111827',
+    color: TEXT_PRIMARY,
+    letterSpacing: 0.2,
   },
   subtitle: {
     fontSize: 14,
-    color: '#6b7280',
-    marginTop: 4,
-  },
-  devToggle: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#e5e7eb',
-  },
-  devToggleActive: {
-    backgroundColor: '#0a84ff',
-  },
-  devToggleLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#111827',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  devToggleLabelActive: {
-    color: '#ffffff',
+    color: TEXT_MUTED,
+    marginTop: 6,
   },
   card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
+    backgroundColor: CARD_OVERLAY,
+    borderRadius: 22,
     padding: 20,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e5e7eb',
-    marginBottom: 20,
+    borderColor: CARD_BORDER,
     shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 6,
+    gap: 16,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#111827',
-    marginBottom: 8,
+    color: TEXT_PRIMARY,
+    letterSpacing: 0.3,
   },
   sectionDescription: {
     fontSize: 14,
-    color: '#6b7280',
-    marginBottom: 16,
+    color: TEXT_MUTED,
+    lineHeight: 20,
   },
   statRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 16,
+    gap: 18,
   },
   statLabel: {
-    fontSize: 13,
-    color: '#6b7280',
+    fontSize: 12,
+    color: TEXT_SOFT,
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.8,
     marginBottom: 4,
   },
   statValue: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '700',
-    color: '#111827',
+    color: TEXT_PRIMARY,
   },
   planBadge: {
     alignSelf: 'flex-start',
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: '#eef2ff',
-    color: '#3730a3',
-    borderRadius: 12,
+    backgroundColor: BRAND_MINT_SOFT,
+    color: BRAND_MINT,
+    borderRadius: 14,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: 0.4,
   },
   loaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 16,
+    gap: 8,
   },
   loaderText: {
     fontSize: 14,
-    color: '#6b7280',
-    marginLeft: 8,
+    color: TEXT_MUTED,
   },
   productCard: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e5e7eb',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 16,
-    backgroundColor: '#fafafa',
+    borderColor: CARD_BORDER,
+    borderRadius: 18,
+    padding: 18,
+    backgroundColor: 'rgba(15,33,30,0.7)',
+    gap: 12,
   },
   productCardActive: {
-    borderColor: '#0a84ff',
-    backgroundColor: '#f0f9ff',
+    borderColor: BRAND_MINT,
+    backgroundColor: 'rgba(44,208,177,0.14)',
   },
   productHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 8,
+    gap: 12,
   },
   productTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#111827',
+    color: TEXT_PRIMARY,
     flex: 1,
     flexWrap: 'wrap',
-    paddingRight: 12,
   },
   productPrice: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
+    fontWeight: '700',
+    color: BRAND_MINT,
     textAlign: 'right',
     maxWidth: 120,
   },
   productDescription: {
     fontSize: 14,
-    color: '#4b5563',
-    marginBottom: 12,
+    color: TEXT_MUTED,
+    lineHeight: 20,
   },
   button: {
-    borderRadius: 12,
-    paddingVertical: 12,
+    borderRadius: 14,
+    paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 8,
+    marginTop: 4,
   },
   buttonPrimary: {
-    backgroundColor: '#0a84ff',
+    backgroundColor: BRAND_MINT,
   },
   buttonSecondary: {
-    backgroundColor: '#1f2937',
+    backgroundColor: 'rgba(246,255,251,0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: BRAND_MINT,
   },
   buttonOutline: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#0a84ff',
+    borderColor: BRAND_MINT,
     backgroundColor: 'transparent',
   },
   buttonDanger: {
-    backgroundColor: '#ff3b30',
+    backgroundColor: DANGER_BG,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: DANGER_BORDER,
   },
   buttonGhost: {
-    backgroundColor: '#eef2ff',
+    backgroundColor: 'rgba(246,255,251,0.05)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(246,255,251,0.08)',
   },
   buttonDisabled: {
     opacity: 0.5,
   },
   buttonLabel: {
-    color: '#ffffff',
+    color: BRAND_SLATE,
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  buttonLabelSecondary: {
+    color: BRAND_MINT,
   },
   buttonLabelOutline: {
-    color: '#0a84ff',
+    color: BRAND_MINT,
+  },
+  buttonLabelDanger: {
+    color: DANGER_TEXT,
   },
   buttonLabelGhost: {
-    color: '#1f2937',
+    color: TEXT_MUTED,
+  },
+  claimBlock: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: CARD_BORDER,
+  },
+  claimTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: TEXT_PRIMARY,
+    letterSpacing: 0.3,
+    marginBottom: 4,
+  },
+  claimSubtitle: {
+    fontSize: 14,
+    color: TEXT_MUTED,
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  claimWalletNote: {
+    fontSize: 12,
+    color: TEXT_SOFT,
+    marginBottom: 12,
+    letterSpacing: 0.4,
+  },
+  claimButtonWrapper: {
+    marginTop: 8,
+    width: '100%',
   },
 });
 

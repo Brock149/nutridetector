@@ -48,6 +48,7 @@ type AppState = {
   tokens: number;
   goalMode: GoalMode;
   history: ScanResult[];
+  lastFreeClaim: string | null;
 };
 
 type AppContextType = AppState & {
@@ -71,6 +72,7 @@ type AppContextType = AppState & {
   addOrUpdateScanResult: (result: ScanResult) => void;
   removeScanResult: (id: string) => void;
   clearHistory: () => void;
+  claimFreeTokens: () => Promise<boolean>;
 };
 
 const DEFAULT_STATE: AppState = {
@@ -82,6 +84,7 @@ const DEFAULT_STATE: AppState = {
   tokens: 0,
   goalMode: 'cut',
   history: [],
+  lastFreeClaim: null,
 };
 
 const STORAGE_KEYS = {
@@ -93,11 +96,24 @@ const STORAGE_KEYS = {
   tokens: 'app/tokens',
   goalMode: 'app/goal_mode',
   history: 'app/history',
+  lastFreeClaim: 'app/last_free_claim',
 };
 
 const HISTORY_LIMIT = 50;
 
+const TOKEN_CAP = 20;
+const FREE_CLAIM_AMOUNT = 10;
+const FREE_CLAIM_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+const persistKey = async (key: string, value: string | null) => {
+  try {
+    await SecureStore.setItemAsync(key, value ?? '');
+  } catch (err) {
+    console.warn('SecureStore write failed', key, err);
+  }
+};
 
 const sanitizeNumber = (value: any): number | undefined => {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -175,17 +191,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     (async () => {
-      const [subscriptionStatus, validUntil, lastVerified, subscriptionProductId, latestReceipt, tokens, goalMode, historyRaw] =
+      const [subscriptionStatus, validUntil, lastVerified, subscriptionProductId, latestReceipt, tokens, goalMode, historyRaw, lastFreeClaim] =
         await Promise.all([
-        SecureStore.getItemAsync(STORAGE_KEYS.subscriptionStatus),
-        SecureStore.getItemAsync(STORAGE_KEYS.validUntil),
-        SecureStore.getItemAsync(STORAGE_KEYS.lastVerified),
+          SecureStore.getItemAsync(STORAGE_KEYS.subscriptionStatus),
+          SecureStore.getItemAsync(STORAGE_KEYS.validUntil),
+          SecureStore.getItemAsync(STORAGE_KEYS.lastVerified),
           SecureStore.getItemAsync(STORAGE_KEYS.subscriptionProductId),
           SecureStore.getItemAsync(STORAGE_KEYS.latestReceipt),
-        SecureStore.getItemAsync(STORAGE_KEYS.tokens),
-        SecureStore.getItemAsync(STORAGE_KEYS.goalMode),
-        SecureStore.getItemAsync(STORAGE_KEYS.history),
-      ]);
+          SecureStore.getItemAsync(STORAGE_KEYS.tokens),
+          SecureStore.getItemAsync(STORAGE_KEYS.goalMode),
+          SecureStore.getItemAsync(STORAGE_KEYS.history),
+          SecureStore.getItemAsync(STORAGE_KEYS.lastFreeClaim),
+        ]);
 
       setState({
         subscriptionStatus: (subscriptionStatus as SubscriptionStatus) || DEFAULT_STATE.subscriptionStatus,
@@ -193,9 +210,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         lastVerified: lastVerified || DEFAULT_STATE.lastVerified,
         subscriptionProductId: (subscriptionProductId as SubscriptionProductId | null) ?? DEFAULT_STATE.subscriptionProductId,
         latestReceipt: latestReceipt || DEFAULT_STATE.latestReceipt,
-        tokens: tokens ? Number(tokens) : DEFAULT_STATE.tokens,
+        tokens: tokens ? Math.min(TOKEN_CAP, Number(tokens)) : DEFAULT_STATE.tokens,
         goalMode: sanitizeGoalMode(goalMode),
         history: parseHistory(historyRaw),
+        lastFreeClaim: lastFreeClaim || DEFAULT_STATE.lastFreeClaim,
       });
       setHydrated(true);
     })();
@@ -220,26 +238,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     if (!hydrated) return;
-    SecureStore.setItemAsync(STORAGE_KEYS.subscriptionStatus, state.subscriptionStatus);
-    SecureStore.setItemAsync(STORAGE_KEYS.validUntil, state.validUntil ?? '');
-    SecureStore.setItemAsync(STORAGE_KEYS.lastVerified, state.lastVerified ?? '');
-    SecureStore.setItemAsync(STORAGE_KEYS.subscriptionProductId, state.subscriptionProductId ?? '');
-    SecureStore.setItemAsync(STORAGE_KEYS.latestReceipt, state.latestReceipt ?? '');
-    SecureStore.setItemAsync(STORAGE_KEYS.tokens, String(state.tokens));
-    SecureStore.setItemAsync(STORAGE_KEYS.goalMode, state.goalMode);
-    SecureStore.setItemAsync(STORAGE_KEYS.history, JSON.stringify(state.history));
+    (async () => {
+      try {
+        await Promise.all([
+          persistKey(STORAGE_KEYS.subscriptionStatus, state.subscriptionStatus),
+          persistKey(STORAGE_KEYS.validUntil, state.validUntil),
+          persistKey(STORAGE_KEYS.lastVerified, state.lastVerified),
+          persistKey(STORAGE_KEYS.subscriptionProductId, state.subscriptionProductId),
+          persistKey(STORAGE_KEYS.latestReceipt, state.latestReceipt),
+          persistKey(STORAGE_KEYS.tokens, String(state.tokens)),
+          persistKey(STORAGE_KEYS.goalMode, state.goalMode),
+          persistKey(STORAGE_KEYS.history, JSON.stringify(state.history)),
+          persistKey(STORAGE_KEYS.lastFreeClaim, state.lastFreeClaim),
+        ]);
+      } catch (err) {
+        console.warn('SecureStore batch write failed', err);
+      }
+    })();
   }, [state, hydrated]);
 
   const setSubscription = useCallback(
     (payload: { status: SubscriptionStatus; validUntil: string | null; productId: SubscriptionProductId | null; receipt?: string | null; lastVerified?: string | null }) => {
-      setState((prev) => ({
-        ...prev,
-        subscriptionStatus: payload.status,
-        validUntil: payload.validUntil,
-        subscriptionProductId: payload.productId,
-        latestReceipt: payload.receipt ?? prev.latestReceipt,
-        lastVerified: payload.lastVerified ?? prev.lastVerified,
-      }));
+      setState((prev) => {
+        const nextReceipt = payload.receipt ?? prev.latestReceipt ?? null;
+        const nextLastVerified = payload.lastVerified ?? prev.lastVerified ?? null;
+        void persistKey(STORAGE_KEYS.subscriptionStatus, payload.status);
+        void persistKey(STORAGE_KEYS.validUntil, payload.validUntil);
+        void persistKey(STORAGE_KEYS.subscriptionProductId, payload.productId);
+        void persistKey(STORAGE_KEYS.latestReceipt, nextReceipt);
+        void persistKey(STORAGE_KEYS.lastVerified, nextLastVerified);
+        return {
+          ...prev,
+          subscriptionStatus: payload.status,
+          validUntil: payload.validUntil,
+          subscriptionProductId: payload.productId,
+          latestReceipt: nextReceipt,
+          lastVerified: nextLastVerified,
+        };
+      });
     },
     []
   );
@@ -251,14 +287,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const purchaseMs = Number.isFinite(purchaseTime) ? purchaseTime : now;
       const durationMs = (meta?.durationDays ?? 30) * 24 * 60 * 60 * 1000;
       const validUntilIso = new Date(purchaseMs + durationMs).toISOString();
-      setState((prev) => ({
-        ...prev,
-        subscriptionStatus: 'active',
-        validUntil: validUntilIso,
-        subscriptionProductId: productId,
-        latestReceipt: receipt ?? prev.latestReceipt,
-        lastVerified: new Date().toISOString(),
-      }));
+      const verifiedIso = new Date().toISOString();
+      setState((prev) => {
+        const nextReceipt = receipt ?? prev.latestReceipt ?? null;
+        void persistKey(STORAGE_KEYS.subscriptionStatus, 'active');
+        void persistKey(STORAGE_KEYS.validUntil, validUntilIso);
+        void persistKey(STORAGE_KEYS.subscriptionProductId, productId);
+        void persistKey(STORAGE_KEYS.latestReceipt, nextReceipt);
+        void persistKey(STORAGE_KEYS.lastVerified, verifiedIso);
+        return {
+          ...prev,
+          subscriptionStatus: 'active',
+          validUntil: validUntilIso,
+          subscriptionProductId: productId,
+          latestReceipt: nextReceipt,
+          lastVerified: verifiedIso,
+        };
+      });
     },
     []
   );
@@ -270,19 +315,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       validUntil: null,
       subscriptionProductId: null,
       latestReceipt: null,
+      lastVerified: null,
     }));
+    void persistKey(STORAGE_KEYS.subscriptionStatus, 'none');
+    void persistKey(STORAGE_KEYS.validUntil, null);
+    void persistKey(STORAGE_KEYS.subscriptionProductId, null);
+    void persistKey(STORAGE_KEYS.latestReceipt, null);
+    void persistKey(STORAGE_KEYS.lastVerified, null);
   }, []);
 
   const setLastVerified = useCallback((iso: string) => {
-    setState((prev) => ({ ...prev, lastVerified: iso }));
+    setState((prev) => {
+      if (prev.lastVerified === iso) {
+        return prev;
+      }
+      void persistKey(STORAGE_KEYS.lastVerified, iso);
+      return { ...prev, lastVerified: iso };
+    });
   }, []);
 
   const earnTokens = useCallback((count: number) => {
-    setState((prev) => ({ ...prev, tokens: prev.tokens + Math.max(0, count) }));
+    if (count <= 0) return;
+    setState((prev) => {
+      const nextTokens = Math.min(TOKEN_CAP, prev.tokens + count);
+      if (nextTokens === prev.tokens) {
+        return prev;
+      }
+      void persistKey(STORAGE_KEYS.tokens, String(nextTokens));
+      return { ...prev, tokens: nextTokens };
+    });
   }, []);
 
   const consumeToken = useCallback(() => {
     let allowed = false;
+    let nextTokenValue: number | null = null;
     setState((prev) => {
       if (prev.subscriptionStatus === 'active') {
         allowed = true;
@@ -290,11 +356,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       if (prev.tokens > 0) {
         allowed = true;
-        return { ...prev, tokens: prev.tokens - 1 };
+        const nextTokens = Math.max(0, prev.tokens - 1);
+        nextTokenValue = nextTokens;
+        return { ...prev, tokens: nextTokens };
       }
       allowed = false;
       return prev;
     });
+    if (nextTokenValue != null) {
+      void persistKey(STORAGE_KEYS.tokens, String(nextTokenValue));
+    }
     return allowed;
   }, []);
 
@@ -320,6 +391,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setState((prev) => ({ ...prev, history: [] }));
   }, []);
 
+  const claimFreeTokens = useCallback(async () => {
+    let updated: { tokens: number; lastFreeClaim: string } | null = null;
+    setState((prev) => {
+      if (prev.tokens >= TOKEN_CAP) {
+        return prev;
+      }
+      const now = Date.now();
+      const lastClaimMs = prev.lastFreeClaim ? new Date(prev.lastFreeClaim).getTime() : NaN;
+      const cooldownReady = !Number.isFinite(lastClaimMs) || now - lastClaimMs >= FREE_CLAIM_INTERVAL_MS;
+      if (!cooldownReady) {
+        return prev;
+      }
+      const nextTokens = Math.min(TOKEN_CAP, prev.tokens + FREE_CLAIM_AMOUNT);
+      const nextClaim = new Date(now).toISOString();
+      updated = { tokens: nextTokens, lastFreeClaim: nextClaim };
+      return {
+        ...prev,
+        tokens: nextTokens,
+        lastFreeClaim: nextClaim,
+      };
+    });
+    if (!updated) {
+      return false;
+    }
+    await persistKey(STORAGE_KEYS.tokens, String(updated.tokens));
+    await persistKey(STORAGE_KEYS.lastFreeClaim, updated.lastFreeClaim);
+    return true;
+  }, []);
+
   const api = useMemo<AppContextType>(
     () => ({
       ...state,
@@ -333,8 +433,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addOrUpdateScanResult,
       removeScanResult,
       clearHistory,
+      claimFreeTokens,
     }),
-    [state, setSubscription, markSubscriptionFromPurchase, clearSubscription, setLastVerified, earnTokens, consumeToken, setGoalMode, addOrUpdateScanResult, removeScanResult, clearHistory]
+    [
+      state,
+      setSubscription,
+      markSubscriptionFromPurchase,
+      clearSubscription,
+      setLastVerified,
+      earnTokens,
+      consumeToken,
+      setGoalMode,
+      addOrUpdateScanResult,
+      removeScanResult,
+      clearHistory,
+      claimFreeTokens,
+    ]
   );
 
   return <AppContext.Provider value={api}>{children}</AppContext.Provider>;

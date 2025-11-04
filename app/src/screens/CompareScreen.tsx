@@ -1,7 +1,19 @@
 import React, { useMemo } from 'react';
-import { View, Text, ScrollView, Button } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Pressable } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useApp, ScanResult } from '../context/AppContext';
+import { LinearGradient } from 'expo-linear-gradient';
+
+const BRAND_SLATE = '#0b1917';
+const PANEL_SLATE = '#10201d';
+const PANEL_OVERLAY = 'rgba(22,49,45,0.72)';
+const CARD_BORDER = 'rgba(255,255,255,0.08)';
+const TEXT_PRIMARY = '#f6fffb';
+const TEXT_MUTED = 'rgba(246,255,251,0.65)';
+const TEXT_SOFT = 'rgba(246,255,251,0.45)';
+const BRAND_MINT = '#2cd0b1';
+const HIGHLIGHT_WIN = '#6ff7d7';
+
 
 type CompareRouteParams = {
   scanIds: string[];
@@ -36,6 +48,18 @@ const decorateScan = (scan: ScanResult): DecoratedScan => ({
   ...scan,
   formattedDate: new Date(scan.createdAt).toLocaleString(),
 });
+
+function ActionButton({ label, onPress, tone = 'solid' }: { label: string; onPress: () => void; tone?: 'solid' | 'secondary' }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[styles.actionButton, tone === 'secondary' ? styles.actionButtonSecondary : styles.actionButtonPrimary]}
+      android_ripple={{ color: 'rgba(0,0,0,0.1)' }}
+    >
+      <Text style={styles.actionButtonLabel}>{label}</Text>
+    </Pressable>
+  );
+}
 
 export default function CompareScreen() {
   const navigation = useNavigation<any>();
@@ -75,90 +99,210 @@ export default function CompareScreen() {
 
   if (!left || !right) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-        <Text style={{ fontSize: 16, fontWeight: '600', marginBottom: 8 }}>Need more scans</Text>
-        <Text style={{ textAlign: 'center', color: '#8e8e93' }}>Add at least two scans to compare them here.</Text>
-        <View style={{ height: 16 }} />
-        <Button title="Go to Scan" onPress={() => navigation.getParent()?.navigate('Scan')} />
-      </View>
+      <LinearGradient colors={[BRAND_SLATE, PANEL_SLATE]} style={styles.screen}>
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>Need more scans</Text>
+          <Text style={styles.emptyBody}>Add at least two scans to compare them here.</Text>
+          <ActionButton label="Go to Scan" onPress={() => navigation.getParent()?.navigate('Scan')} />
+        </View>
+      </LinearGradient>
     );
   }
 
   return (
-    <View style={{ flex: 1 }}>
-      <ScrollView contentContainerStyle={{ padding: 16 }}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 }}>
-          <View style={{ flex: 1, marginRight: 8 }}>
-            <Text style={{ fontWeight: '600', marginBottom: 4 }}>Scan A</Text>
-            <Text style={{ color: '#8e8e93', fontSize: 12 }}>{left.formattedDate}</Text>
-            <Text style={{ marginTop: 4 }}>Price: {formatCurrency(left.price)}</Text>
+    <LinearGradient colors={[BRAND_SLATE, PANEL_SLATE]} style={styles.screen}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.scanRow}>
+          <View style={styles.scanCard}>
+            <Text style={styles.scanTitle}>Scan A</Text>
+            <Text style={styles.scanDate}>{left.formattedDate}</Text>
+            <Text style={styles.scanMeta}>Price · {formatCurrency(left.price)}</Text>
           </View>
-          <View style={{ flex: 1, marginLeft: 8 }}>
-            <Text style={{ fontWeight: '600', marginBottom: 4 }}>Scan B</Text>
-            <Text style={{ color: '#8e8e93', fontSize: 12 }}>{right.formattedDate}</Text>
-            <Text style={{ marginTop: 4 }}>Price: {formatCurrency(right.price)}</Text>
+          <View style={styles.scanCard}>
+            <Text style={styles.scanTitle}>Scan B</Text>
+            <Text style={styles.scanDate}>{right.formattedDate}</Text>
+            <Text style={styles.scanMeta}>Price · {formatCurrency(right.price)}</Text>
           </View>
         </View>
 
-        {metricRows.map((row) => {
-          const leftValue = left.metrics[row.key as MetricKey];
-          const rightValue = right.metrics[row.key as MetricKey];
-          const leftNumeric = Number.isFinite(leftValue ?? NaN) ? Number(leftValue) : null;
-          const rightNumeric = Number.isFinite(rightValue ?? NaN) ? Number(rightValue) : null;
-          let leftHighlight = false;
-          let rightHighlight = false;
-          if (leftNumeric != null && rightNumeric != null) {
-            if (row.higherIsBetter) {
-              if (leftNumeric > rightNumeric) leftHighlight = true;
-              else if (rightNumeric > leftNumeric) rightHighlight = true;
-            } else {
-              if (leftNumeric < rightNumeric) leftHighlight = true;
-              else if (rightNumeric < leftNumeric) rightHighlight = true;
+        <View style={styles.metricsShell}>
+          {metricRows.map((row) => {
+            const leftValue = left.metrics[row.key as MetricKey];
+            const rightValue = right.metrics[row.key as MetricKey];
+            const leftNumeric = Number.isFinite(leftValue ?? NaN) ? Number(leftValue) : null;
+            const rightNumeric = Number.isFinite(rightValue ?? NaN) ? Number(rightValue) : null;
+            let leftHighlight = false;
+            let rightHighlight = false;
+            if (leftNumeric != null && rightNumeric != null) {
+              if (row.higherIsBetter) {
+                if (leftNumeric > rightNumeric) leftHighlight = true;
+                else if (rightNumeric > leftNumeric) rightHighlight = true;
+              } else {
+                if (leftNumeric < rightNumeric) leftHighlight = true;
+                else if (rightNumeric < leftNumeric) rightHighlight = true;
+              }
             }
-          }
-          return (
-            <View key={row.key} style={{ marginBottom: 12, padding: 12, borderRadius: 12, backgroundColor: '#f8f9fb' }}>
-              <Text style={{ fontWeight: '600', marginBottom: 8 }}>{row.label}</Text>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <View style={{ flex: 1, marginRight: 8 }}>
-                  <Text style={{ fontSize: 12, color: '#8e8e93' }}>Scan A</Text>
-                  <Text
-                    style={{
-                      fontSize: 16,
-                      fontWeight: '600',
-                      color: leftHighlight ? '#34c759' : '#1c1c1e',
-                    }}
-                  >
-                    {formatNumber(leftNumeric)}
-                  </Text>
-                </View>
-                <View style={{ flex: 1, marginLeft: 8 }}>
-                  <Text style={{ fontSize: 12, color: '#8e8e93' }}>Scan B</Text>
-                  <Text
-                    style={{
-                      fontSize: 16,
-                      fontWeight: '600',
-                      color: rightHighlight ? '#34c759' : '#1c1c1e',
-                    }}
-                  >
-                    {formatNumber(rightNumeric)}
-                  </Text>
+            return (
+              <View key={row.key} style={styles.metricRow}>
+                <Text style={styles.metricLabel}>{row.label}</Text>
+                <View style={styles.metricValues}>
+                  <View style={styles.metricColumn}>
+                    <Text style={styles.metricColumnLabel}>Scan A</Text>
+                    <Text style={[styles.metricValue, leftHighlight && styles.metricValueHighlight]}>{formatNumber(leftNumeric)}</Text>
+                  </View>
+                  <View style={styles.metricColumn}>
+                    <Text style={styles.metricColumnLabel}>Scan B</Text>
+                    <Text style={[styles.metricValue, rightHighlight && styles.metricValueHighlight]}>{formatNumber(rightNumeric)}</Text>
+                  </View>
                 </View>
               </View>
-            </View>
-          );
-        })}
+            );
+          })}
+        </View>
       </ScrollView>
-      <View style={{ padding: 16, borderTopWidth: 1, borderColor: '#e5e5ea', backgroundColor: '#fff', flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
-        <View style={{ flex: 1 }}>
-          <Button title="Swap" onPress={handleSwap} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Button title="Reselect" onPress={handleReselect} />
-        </View>
+      <View style={styles.actionsBar}>
+        <ActionButton label="Swap" onPress={handleSwap} />
+        <ActionButton label="Reselect" onPress={handleReselect} tone="secondary" />
       </View>
-    </View>
+    </LinearGradient>
   );
 }
+
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+  },
+  content: {
+    paddingHorizontal: 18,
+    paddingTop: 24,
+    paddingBottom: 120,
+    gap: 18,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  emptyTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  emptyBody: {
+    color: TEXT_MUTED,
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 20,
+    maxWidth: 260,
+  },
+  scanRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 18,
+  },
+  scanCard: {
+    flex: 1,
+    padding: 18,
+    borderRadius: 18,
+    backgroundColor: PANEL_OVERLAY,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    gap: 6,
+  },
+  scanTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  scanDate: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+  },
+  scanMeta: {
+    color: TEXT_SOFT,
+    fontSize: 12,
+    letterSpacing: 0.3,
+  },
+  metricsShell: {
+    borderRadius: 24,
+    padding: 12,
+    backgroundColor: PANEL_OVERLAY,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  metricRow: {
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+    gap: 12,
+  },
+  metricLabel: {
+    color: TEXT_PRIMARY,
+    fontSize: 14,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  metricValues: {
+    flexDirection: 'row',
+    gap: 18,
+  },
+  metricColumn: {
+    flex: 1,
+  },
+  metricColumnLabel: {
+    color: TEXT_SOFT,
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  metricValue: {
+    color: TEXT_PRIMARY,
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  metricValueHighlight: {
+    color: HIGHLIGHT_WIN,
+  },
+  actionsBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    gap: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    paddingTop: 16,
+    backgroundColor: PANEL_OVERLAY,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: CARD_BORDER,
+  },
+  actionButton: {
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionButtonPrimary: {
+    backgroundColor: BRAND_MINT,
+  },
+  actionButtonSecondary: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: BRAND_MINT,
+    backgroundColor: 'transparent',
+  },
+  actionButtonLabel: {
+    color: BRAND_SLATE,
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+});
 
 

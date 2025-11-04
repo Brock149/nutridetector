@@ -90,8 +90,8 @@ export default function ScanScreen() {
     <View style={{ flex: 1 }}>
       {/* Top badges */}
       <View style={{ padding: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Text>🔑 {tokens} tokens</Text>
-        {subscriptionStatus === 'active' ? <Text>⭐ Unlimited</Text> : null}
+        <Text style={{ color: '#fff' }}>🔑 {tokens} tokens</Text>
+        {subscriptionStatus === 'active' ? <Text style={{ color: '#fff' }}>⭐ Unlimited</Text> : null}
       </View>
 
       {/* Camera area */}

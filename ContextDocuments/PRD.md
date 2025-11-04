@@ -51,7 +51,7 @@ Status: Token/subscription flows remain on the roadmap; the current build focuse
    - Detector + OCR already offline.
    - Token/subscription state persistence pending.
 
-📈 Current Benchmark (Sept 2025)
+📈 Current Benchmark (Sept 27 2025)
 
 - Dataset: 125 labelled images (YOLO format) covering standard Nutrition Facts layouts; target 200+ for next retrain.
 - GitHub Actions workflow `export-tflite.yml` performs training/export with pinned toolchain and fused NMS output.

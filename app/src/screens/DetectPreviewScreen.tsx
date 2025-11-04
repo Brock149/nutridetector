@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Image, Button, TextInput, ActivityIndicator, ScrollView } from 'react-native';
 import { DetectorBox } from '../services/detector';
 import {
@@ -7,10 +8,23 @@ import {
   FieldReading,
 } from '../services/detectAndParse';
 
+const CONFIDENCE_THRESHOLD = 0.55;
+
 type FieldState = {
   label: string;
   key: 'calories' | 'protein' | 'servings' | 'servingSize' | 'servingAlt';
   reading?: FieldReading;
+};
+
+type NavigationOverrides = {
+  autoAdvance: boolean;
+  calories?: number;
+  protein?: number;
+  servings?: number;
+  servingQty?: number;
+  servingUnit?: string;
+  servingAlt?: number;
+  servingAltUnit?: string;
 };
 
 export default function DetectPreviewScreen({ route, navigation }: any) {
@@ -29,6 +43,7 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
   const [previewUri, setPreviewUri] = useState<string | null>(imageUri ?? null);
   const [detectSize, setDetectSize] = useState<{ width: number; height: number }>({ width: originalWidth ?? 1, height: originalHeight ?? 1 });
   const [errors, setErrors] = useState<string[]>([]);
+  const autoAdvanceRef = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -38,9 +53,6 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
         setResult(combined);
         const { detection } = combined;
         setBoxes(detection.boxes);
-        if (detection.meta) {
-          console.log('detector meta', detection.meta);
-        }
         if (detection.processedUri) {
           setPreviewUri(detection.processedUri);
         }
@@ -52,27 +64,26 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
         const calorieReading = combined.fields.calories;
         const proteinReading = combined.fields.protein;
         const servingsReading = combined.fields.servingsPerContainer;
+        const servingSizeReading = combined.fields.servingSizeQuantityUnit;
+        const servingAltReading = combined.fields.servingSizeAltGramsMl;
 
-        if (calorieReading?.numeric?.value != null && calorieReading.combinedConfidence >= 0.55) {
+        if (calorieReading?.numeric?.value != null && calorieReading.combinedConfidence >= CONFIDENCE_THRESHOLD) {
           setCalories(String(calorieReading.numeric.value));
         }
-        if (proteinReading?.numeric?.value != null && proteinReading.combinedConfidence >= 0.55) {
+        if (proteinReading?.numeric?.value != null && proteinReading.combinedConfidence >= CONFIDENCE_THRESHOLD) {
           setProtein(String(proteinReading.numeric.value));
         }
-        if (servingsReading?.numeric?.value != null && servingsReading.combinedConfidence >= 0.55) {
+        if (servingsReading?.numeric?.value != null && servingsReading.combinedConfidence >= CONFIDENCE_THRESHOLD) {
           setServings(String(servingsReading.numeric.value));
         }
-        const servingSizeReading = combined.fields.servingSizeQuantityUnit;
-        if (servingSizeReading?.numeric?.quantity != null && servingSizeReading.combinedConfidence >= 0.55) {
+        if (servingSizeReading?.numeric?.quantity != null && servingSizeReading.combinedConfidence >= CONFIDENCE_THRESHOLD) {
           setServingQuantity(String(servingSizeReading.numeric.quantity));
         }
         const unitText = (servingSizeReading?.numeric as any)?.unitText ?? servingSizeReading?.numeric?.unit;
         if (unitText) {
           setServingUnit(unitText);
         }
-
-        const servingAltReading = combined.fields.servingSizeAltGramsMl;
-        if (servingAltReading?.numeric?.value != null && servingAltReading.combinedConfidence >= 0.55) {
+        if (servingAltReading?.numeric?.value != null && servingAltReading.combinedConfidence >= CONFIDENCE_THRESHOLD) {
           setServingAlt(String(servingAltReading.numeric.value));
         }
         if (servingAltReading?.numeric?.unit) {
@@ -87,6 +98,97 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
     })();
   }, [imageUri]);
 
+  const navigateToResults = useCallback(
+    (overrides: NavigationOverrides) => {
+      const parsePositive = (value: number | string | undefined) => {
+        const num = typeof value === 'number' ? value : Number(value);
+        return Number.isFinite(num) && num > 0 ? num : undefined;
+      };
+      const parseNonNegative = (value: number | string | undefined) => {
+        const num = typeof value === 'number' ? value : Number(value);
+        return Number.isFinite(num) && num >= 0 ? num : undefined;
+      };
+
+      const caloriesValue = parsePositive(overrides.calories ?? calories);
+      const proteinValue = parseNonNegative(overrides.protein ?? protein);
+      const servingsValue = parsePositive(overrides.servings ?? servings);
+      const servingQtyValue = parsePositive(overrides.servingQty ?? servingQuantity);
+      const servingUnitValue = ((overrides.servingUnit ?? servingUnit) || '').trim();
+      const servingAltValue = parsePositive(overrides.servingAlt ?? servingAlt);
+      const servingAltUnitValue = ((overrides.servingAltUnit ?? servingAltUnit) || '').trim();
+
+      const servingSizePayload = servingQtyValue || servingUnitValue
+        ? {
+            quantity: servingQtyValue,
+            unit: servingUnitValue || undefined,
+          }
+        : undefined;
+
+      const servingAltPayload = servingAltValue || servingAltUnitValue
+        ? {
+            value: servingAltValue,
+            unit: servingAltUnitValue || undefined,
+          }
+        : undefined;
+
+      navigation.replace('ResultsScreen', {
+        imageUri,
+        price,
+        calories: caloriesValue,
+        proteinGrams: proteinValue,
+        servingsPerContainer: servingsValue,
+        rawText: result?.rawText,
+        fieldReadings: result?.order?.map((r) => ({
+          className: r.className,
+          detectionScore: r.detectionScore,
+          parseConfidence: r.parseConfidence,
+          combinedConfidence: r.combinedConfidence,
+          rawText: r.rawText,
+          value: r.numeric?.value,
+          unit: (r.numeric as any)?.unitText || r.numeric?.unit,
+          cropUri: r.cropUri,
+        })),
+        servingSize: servingSizePayload,
+        servingSizeAlt: servingAltPayload,
+        scanId: route.params?.scanId,
+        createdAt: route.params?.createdAt,
+        autoAdvance: overrides.autoAdvance,
+      });
+    },
+    [calories, protein, servings, servingQuantity, servingUnit, servingAlt, servingAltUnit, imageUri, price, navigation, result, route.params?.scanId, route.params?.createdAt]
+  );
+
+  useEffect(() => {
+    if (!result || autoAdvanceRef.current) {
+      return;
+    }
+    const caloriesReading = result.fields.calories;
+    const proteinReading = result.fields.protein;
+    const servingsReading = result.fields.servingsPerContainer;
+
+    const allHighConfidence = [caloriesReading, proteinReading, servingsReading].every((reading) => {
+      if (!reading) return false;
+      const value = (reading.numeric as any)?.value ?? reading.numeric;
+      return value != null && (reading.combinedConfidence ?? 0) >= CONFIDENCE_THRESHOLD;
+    });
+
+    if (allHighConfidence) {
+      autoAdvanceRef.current = true;
+      const servingSizeReading = result.fields.servingSizeQuantityUnit;
+      const servingAltReading = result.fields.servingSizeAltGramsMl;
+      navigateToResults({
+        autoAdvance: true,
+        calories: caloriesReading?.numeric?.value,
+        protein: proteinReading?.numeric?.value,
+        servings: servingsReading?.numeric?.value,
+        servingQty: servingSizeReading?.numeric?.quantity,
+        servingUnit: (servingSizeReading?.numeric as any)?.unitText ?? servingSizeReading?.numeric?.unit,
+        servingAlt: servingAltReading?.numeric?.value,
+        servingAltUnit: servingAltReading?.numeric?.unit,
+      });
+    }
+  }, [result, navigateToResults]);
+
   const fieldStates: FieldState[] = useMemo(() => {
     return [
       { label: 'Calories', key: 'calories', reading: result?.fields.calories },
@@ -96,6 +198,20 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
       { label: 'Serving Size (g/ml)', key: 'servingAlt', reading: result?.fields.servingSizeAltGramsMl },
     ];
   }, [result]);
+
+  const flaggedKeys = useMemo(() => {
+    return new Set(
+      fieldStates
+        .filter((field) => {
+          const reading = field.reading;
+          const confidence = reading?.combinedConfidence ?? 0;
+          const hasNumeric = reading?.numeric && (reading.numeric as any).value != null;
+          const numericValue = (reading?.numeric as any)?.value ?? (reading?.numeric as any)?.quantity ?? reading?.numeric;
+          return !reading || numericValue == null || confidence < CONFIDENCE_THRESHOLD;
+        })
+        .map((field) => field.key)
+    );
+  }, [fieldStates]);
 
   const renderBox = (b: DetectorBox) => {
     const imgW = detectSize.width || 1;
@@ -122,50 +238,6 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
     );
   };
 
-  const handleContinue = () => {
-    const calNum = Number(calories);
-    const proNum = Number(protein);
-    const servNum = Number(servings);
-    const servingQtyNum = Number(servingQuantity);
-    const servingAltNum = Number(servingAlt);
-    const servingSizePayload =
-      (isFinite(servingQtyNum) && servingQtyNum > 0) || servingUnit
-        ? {
-            quantity: isFinite(servingQtyNum) && servingQtyNum > 0 ? servingQtyNum : undefined,
-            unit: servingUnit || undefined,
-          }
-        : undefined;
-    const servingAltPayload =
-      (isFinite(servingAltNum) && servingAltNum > 0) || servingAltUnit
-        ? {
-            value: isFinite(servingAltNum) && servingAltNum > 0 ? servingAltNum : undefined,
-            unit: servingAltUnit || undefined,
-          }
-        : undefined;
-    navigation.replace('ResultsScreen', {
-      imageUri,
-      price,
-      calories: isFinite(calNum) && calNum > 0 ? calNum : undefined,
-      proteinGrams: isFinite(proNum) && proNum >= 0 ? proNum : undefined,
-      servingsPerContainer: isFinite(servNum) && servNum > 0 ? servNum : undefined,
-      rawText: result?.rawText,
-      fieldReadings: result?.order?.map((r) => ({
-        className: r.className,
-        detectionScore: r.detectionScore,
-        parseConfidence: r.parseConfidence,
-        combinedConfidence: r.combinedConfidence,
-        rawText: r.rawText,
-        value: r.numeric?.value,
-        unit: (r.numeric as any)?.unitText || r.numeric?.unit,
-        cropUri: r.cropUri,
-      })),
-      servingSize: servingSizePayload,
-      servingSizeAlt: servingAltPayload,
-      scanId: route.params?.scanId,
-      createdAt: route.params?.createdAt,
-    });
-  };
-
   const confidenceLabel = (reading?: FieldReading) => {
     if (!reading) return 'No detection';
     const pct = Math.round(reading.combinedConfidence * 100);
@@ -174,11 +246,24 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
     return `Low (${pct}%)`;
   };
 
+  const handleContinue = () => {
+    navigateToResults({ autoAdvance: false });
+  };
+
+  const needsCalories = flaggedKeys.has('calories');
+  const needsProtein = flaggedKeys.has('protein');
+  const needsServings = flaggedKeys.has('servings');
+  const needsServingSize = flaggedKeys.has('servingSize');
+  const needsServingAlt = flaggedKeys.has('servingAlt');
+
   return (
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: 12 }}>
         <Text style={{ marginBottom: 8, fontWeight: '600' }}>Detector preview {boxes.length ? `(${boxes.length} boxes)` : ''}</Text>
-        <View style={{ aspectRatio: 1, backgroundColor: '#000', borderRadius: 8, overflow: 'hidden' }} onLayout={(e) => setContainer({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}>
+        <View
+          style={{ aspectRatio: 1, backgroundColor: '#000', borderRadius: 8, overflow: 'hidden' }}
+          onLayout={(e) => setContainer({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
+        >
           <Image source={{ uri: previewUri ?? imageUri }} style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }} resizeMode="contain" />
           {boxes.map(renderBox)}
           {loading ? (
@@ -192,9 +277,19 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
           <Text style={{ fontWeight: '600', marginBottom: 4 }}>Auto-recognized fields</Text>
           {fieldStates.map((field) => {
             const reading = field.reading;
-            const low = (reading?.combinedConfidence ?? 0) < 0.55;
+            const low = (reading?.combinedConfidence ?? 0) < CONFIDENCE_THRESHOLD;
             return (
-              <View key={field.key} style={{ marginBottom: 10, padding: 8, borderWidth: 1, borderColor: low ? '#ff3b30' : '#d1d1d6', borderRadius: 6, backgroundColor: low ? '#fff5f5' : '#f8f9fb' }}>
+              <View
+                key={field.key}
+                style={{
+                  marginBottom: 10,
+                  padding: 8,
+                  borderWidth: 1,
+                  borderColor: low ? '#ff3b30' : '#d1d1d6',
+                  borderRadius: 6,
+                  backgroundColor: low ? '#fff5f5' : '#f8f9fb',
+                }}
+              >
                 <Text style={{ fontWeight: '500' }}>{field.label}</Text>
                 <Text style={{ fontSize: 12, color: low ? '#ff3b30' : '#8e8e93' }}>{confidenceLabel(reading)}</Text>
                 <Text style={{ fontSize: 12, color: '#636366', marginTop: 2 }}>{reading?.rawText || '—'}</Text>
@@ -207,38 +302,94 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
           <View style={{ marginTop: 8, backgroundColor: '#fff5f5', padding: 8, borderRadius: 6, borderWidth: 1, borderColor: '#ff3b30' }}>
             <Text style={{ color: '#ff3b30', fontWeight: '600' }}>Warnings</Text>
             {errors.map((err, idx) => (
-              <Text key={idx} style={{ color: '#ff3b30', fontSize: 12 }}>{err}</Text>
+              <Text key={idx} style={{ color: '#ff3b30', fontSize: 12 }}>
+                {err}
+              </Text>
             ))}
           </View>
         ) : null}
 
         <View style={{ marginTop: 16 }}>
           <Text style={{ marginBottom: 4, fontWeight: '600' }}>Manual review</Text>
-          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-            <View style={{ flexDirection: 'column', minWidth: '30%' }}>
-              <Text>Calories</Text>
-              <TextInput value={calories} onChangeText={setCalories} keyboardType="number-pad" placeholder="e.g. 200" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }} />
-            </View>
-            <View style={{ flexDirection: 'column', minWidth: '30%' }}>
-              <Text>Protein (g)</Text>
-              <TextInput value={protein} onChangeText={setProtein} keyboardType="number-pad" placeholder="e.g. 8" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }} />
-            </View>
-            <View style={{ flexDirection: 'column', minWidth: '30%' }}>
-              <Text>Servings</Text>
-              <TextInput value={servings} onChangeText={setServings} keyboardType="decimal-pad" placeholder="e.g. 15" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }} />
-            </View>
-            <View style={{ flexDirection: 'column', minWidth: '45%' }}>
-              <Text>Serving size qty</Text>
-              <TextInput value={servingQuantity} onChangeText={setServingQuantity} keyboardType="decimal-pad" placeholder="e.g. 0.75" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, marginBottom: 6 }} />
-              <Text>Serving size unit</Text>
-              <TextInput value={servingUnit} onChangeText={setServingUnit} placeholder="e.g. cup" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }} />
-            </View>
-            <View style={{ flexDirection: 'column', minWidth: '45%' }}>
-              <Text>Serving size alt (g/ml)</Text>
-              <TextInput value={servingAlt} onChangeText={setServingAlt} keyboardType="decimal-pad" placeholder="e.g. 228" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, marginBottom: 6 }} />
-              <Text>Alt unit</Text>
-              <TextInput value={servingAltUnit} onChangeText={setServingAltUnit} placeholder="e.g. g" style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }} />
-            </View>
+          {flaggedKeys.size === 0 ? (
+            <Text style={{ fontSize: 12, color: '#636366', marginBottom: 12 }}>All key fields look good. Tap continue if you'd like to review or edit anyway.</Text>
+          ) : null}
+
+          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 12 }}>
+            {needsCalories ? (
+              <View style={{ flexDirection: 'column', minWidth: '30%' }}>
+                <Text>Calories</Text>
+                <TextInput
+                  value={calories}
+                  onChangeText={setCalories}
+                  keyboardType="number-pad"
+                  placeholder="e.g. 200"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }}
+                />
+              </View>
+            ) : null}
+            {needsProtein ? (
+              <View style={{ flexDirection: 'column', minWidth: '30%' }}>
+                <Text>Protein (g)</Text>
+                <TextInput
+                  value={protein}
+                  onChangeText={setProtein}
+                  keyboardType="number-pad"
+                  placeholder="e.g. 8"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }}
+                />
+              </View>
+            ) : null}
+            {needsServings ? (
+              <View style={{ flexDirection: 'column', minWidth: '30%' }}>
+                <Text>Servings</Text>
+                <TextInput
+                  value={servings}
+                  onChangeText={setServings}
+                  keyboardType="decimal-pad"
+                  placeholder="e.g. 10"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }}
+                />
+              </View>
+            ) : null}
+            {needsServingSize ? (
+              <View style={{ flexDirection: 'column', minWidth: '45%' }}>
+                <Text>Serving size qty</Text>
+                <TextInput
+                  value={servingQuantity}
+                  onChangeText={setServingQuantity}
+                  keyboardType="decimal-pad"
+                  placeholder="e.g. 0.75"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, marginBottom: 6 }}
+                />
+                <Text>Serving size unit</Text>
+                <TextInput
+                  value={servingUnit}
+                  onChangeText={setServingUnit}
+                  placeholder="e.g. cup"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }}
+                />
+              </View>
+            ) : null}
+            {needsServingAlt ? (
+              <View style={{ flexDirection: 'column', minWidth: '45%' }}>
+                <Text>Serving size alt (g/ml)</Text>
+                <TextInput
+                  value={servingAlt}
+                  onChangeText={setServingAlt}
+                  keyboardType="decimal-pad"
+                  placeholder="e.g. 228"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, marginBottom: 6 }}
+                />
+                <Text>Alt unit</Text>
+                <TextInput
+                  value={servingAltUnit}
+                  onChangeText={setServingAltUnit}
+                  placeholder="e.g. g"
+                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }}
+                />
+              </View>
+            ) : null}
           </View>
           <Button title={loading ? 'Processing…' : 'Continue'} disabled={loading} onPress={handleContinue} />
         </View>
@@ -246,5 +397,3 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
     </View>
   );
 }
-
-

@@ -2,7 +2,7 @@
   "expo": {
     "name": "app",
     "slug": "app",
-    "version": "1.0.2",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -14,11 +14,12 @@
     },
     "ios": {
       "bundleIdentifier": "com.broco.cutly",
-      "buildNumber": "1.0.2",
-      "supportsTablet": true,
+      "buildNumber": "1.0.5",
+      "supportsTablet": false,
       "infoPlist": {
         "NSCameraUsageDescription": "We use the camera to scan nutrition labels.",
-        "NSPhotoLibraryUsageDescription": "We access photos when you import label images."
+        "NSPhotoLibraryUsageDescription": "We access photos when you import label images.",
+        "UIRequiresFullScreen": true
       },
       "config": {
         "usesNonExemptEncryption": false
@@ -35,7 +36,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "versionCode": 2
+      "versionCode": 5
     },
     "web": {
       "favicon": "./assets/favicon.png"
