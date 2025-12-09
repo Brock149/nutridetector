@@ -1,3 +1,14 @@
+type AnyTypedArray =
+  | Float32Array
+  | Float64Array
+  | Int32Array
+  | Uint32Array
+  | Int16Array
+  | Uint16Array
+  | Int8Array
+  | Uint8Array
+  | Uint8ClampedArray;
+
 import { loadTensorflowModel, TensorflowModel } from 'react-native-fast-tflite';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { decode as decodeJpeg } from 'jpeg-js';
@@ -79,7 +90,7 @@ function safeJson(value: any): string {
   }
 }
 
-function isTypedArray(value: any): value is ArrayBufferView {
+function isTypedArray(value: any): value is AnyTypedArray {
   return (
     value instanceof Int8Array ||
     value instanceof Uint8Array ||
@@ -183,14 +194,14 @@ export async function detectFieldsOnImage(uri: string): Promise<DetectorResult> 
     const outputsArray = Array.isArray(outputsRaw) ? outputsRaw : [outputsRaw];
     pushLog(`outputs count=${outputsArray.length}`);
 
-    const tensors = outputsArray.map((tensor, idx) => {
+    const tensors: AnyTypedArray[] = outputsArray.map((tensor, idx) => {
       if (isTypedArray(tensor)) {
         pushLog(`tensor[${idx}] len=${tensor.length}`);
-        return tensor as ArrayBufferView;
+        return tensor;
       }
       if (tensor && typeof tensor === 'object') {
         if (isTypedArray((tensor as any).data)) {
-          const typed = (tensor as any).data as ArrayBufferView;
+          const typed = (tensor as any).data as AnyTypedArray;
           pushLog(`tensor[${idx}] data len=${typed.length}`);
           return typed;
         }
@@ -206,7 +217,7 @@ export async function detectFieldsOnImage(uri: string): Promise<DetectorResult> 
     });
 
     const outputShape = model.outputs?.[0]?.shape ?? [];
-    const out0 = tensors[0] as ArrayBufferView | undefined;
+    const out0 = tensors[0];
     const out0Len = out0?.length ?? 0;
     pushLog(`out0 shape=${safeJson(outputShape)} len=${out0Len}`);
 

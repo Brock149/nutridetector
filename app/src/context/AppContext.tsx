@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SUBSCRIPTION_PRODUCTS, SubscriptionProductId } from '../constants/subscriptions';
 
 type SubscriptionStatus = 'active' | 'expired' | 'none';
@@ -107,11 +108,27 @@ const FREE_CLAIM_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const persistKey = async (key: string, value: string | null) => {
+const persistSecure = async (key: string, value: string | null) => {
   try {
-    await SecureStore.setItemAsync(key, value ?? '');
+    if (value == null) {
+      await SecureStore.deleteItemAsync(key);
+    } else {
+      await SecureStore.setItemAsync(key, value);
+    }
   } catch (err) {
     console.warn('SecureStore write failed', key, err);
+  }
+};
+
+const persistAsync = async (key: string, value: string | null) => {
+  try {
+    if (value == null) {
+      await AsyncStorage.removeItem(key);
+    } else {
+      await AsyncStorage.setItem(key, value);
+    }
+  } catch (err) {
+    console.warn('AsyncStorage write failed', key, err);
   }
 };
 
@@ -191,29 +208,95 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     (async () => {
-      const [subscriptionStatus, validUntil, lastVerified, subscriptionProductId, latestReceipt, tokens, goalMode, historyRaw, lastFreeClaim] =
-        await Promise.all([
-          SecureStore.getItemAsync(STORAGE_KEYS.subscriptionStatus),
-          SecureStore.getItemAsync(STORAGE_KEYS.validUntil),
-          SecureStore.getItemAsync(STORAGE_KEYS.lastVerified),
-          SecureStore.getItemAsync(STORAGE_KEYS.subscriptionProductId),
-          SecureStore.getItemAsync(STORAGE_KEYS.latestReceipt),
-          SecureStore.getItemAsync(STORAGE_KEYS.tokens),
-          SecureStore.getItemAsync(STORAGE_KEYS.goalMode),
-          SecureStore.getItemAsync(STORAGE_KEYS.history),
-          SecureStore.getItemAsync(STORAGE_KEYS.lastFreeClaim),
-        ]);
+      const [
+        subscriptionStatusSecure,
+        validUntilSecure,
+        lastVerifiedSecure,
+        subscriptionProductIdSecure,
+        latestReceiptSecure,
+        tokensSecure,
+        goalModeSecure,
+        historySecure,
+        lastFreeClaimSecure,
+      ] = await Promise.all([
+        SecureStore.getItemAsync(STORAGE_KEYS.subscriptionStatus),
+        SecureStore.getItemAsync(STORAGE_KEYS.validUntil),
+        SecureStore.getItemAsync(STORAGE_KEYS.lastVerified),
+        SecureStore.getItemAsync(STORAGE_KEYS.subscriptionProductId),
+        SecureStore.getItemAsync(STORAGE_KEYS.latestReceipt),
+        SecureStore.getItemAsync(STORAGE_KEYS.tokens),
+        SecureStore.getItemAsync(STORAGE_KEYS.goalMode),
+        SecureStore.getItemAsync(STORAGE_KEYS.history),
+        SecureStore.getItemAsync(STORAGE_KEYS.lastFreeClaim),
+      ]);
+
+      const asyncPairs = await AsyncStorage.multiGet([
+        STORAGE_KEYS.tokens,
+        STORAGE_KEYS.goalMode,
+        STORAGE_KEYS.history,
+        STORAGE_KEYS.lastFreeClaim,
+      ]);
+      const asyncMap = Object.fromEntries(asyncPairs.map(([key, value]) => [key, value ?? null])) as Record<string, string | null>;
+
+      const normalizeStored = (value: string | null | undefined): string | null => {
+        if (value == null || value === '') return null;
+        return value;
+      };
+
+      const tokensFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.tokens]);
+      const tokensFromSecure = normalizeStored(tokensSecure);
+      const goalModeFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.goalMode]);
+      const goalModeFromSecure = normalizeStored(goalModeSecure);
+      const historyFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.history]);
+      const historyFromSecure = normalizeStored(historySecure);
+      const lastFreeClaimFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.lastFreeClaim]);
+      const lastFreeClaimFromSecure = normalizeStored(lastFreeClaimSecure);
+
+      const tokensValue = tokensFromAsync ?? tokensFromSecure;
+      const goalModeValue = goalModeFromAsync ?? goalModeFromSecure;
+      const historyValue = historyFromAsync ?? historyFromSecure;
+      const lastFreeClaimValue = lastFreeClaimFromAsync ?? lastFreeClaimFromSecure;
+
+      const migrations: Promise<void>[] = [];
+      if (tokensValue != null && tokensFromAsync == null) {
+        migrations.push(persistAsync(STORAGE_KEYS.tokens, tokensValue));
+      }
+      if (tokensFromSecure != null && tokensFromAsync == null) {
+        migrations.push(persistSecure(STORAGE_KEYS.tokens, null));
+      }
+      if (goalModeValue != null && goalModeFromAsync == null) {
+        migrations.push(persistAsync(STORAGE_KEYS.goalMode, goalModeValue));
+      }
+      if (goalModeFromSecure != null && goalModeFromAsync == null) {
+        migrations.push(persistSecure(STORAGE_KEYS.goalMode, null));
+      }
+      if (historyValue != null && historyFromAsync == null) {
+        migrations.push(persistAsync(STORAGE_KEYS.history, historyValue));
+      }
+      if (historyFromSecure != null && historyFromAsync == null) {
+        migrations.push(persistSecure(STORAGE_KEYS.history, null));
+      }
+      if (lastFreeClaimValue != null && lastFreeClaimFromAsync == null) {
+        migrations.push(persistAsync(STORAGE_KEYS.lastFreeClaim, lastFreeClaimValue));
+      }
+      if (lastFreeClaimFromSecure != null && lastFreeClaimFromAsync == null) {
+        migrations.push(persistSecure(STORAGE_KEYS.lastFreeClaim, null));
+      }
+
+      if (migrations.length > 0) {
+        await Promise.all(migrations);
+      }
 
       setState({
-        subscriptionStatus: (subscriptionStatus as SubscriptionStatus) || DEFAULT_STATE.subscriptionStatus,
-        validUntil: validUntil || DEFAULT_STATE.validUntil,
-        lastVerified: lastVerified || DEFAULT_STATE.lastVerified,
-        subscriptionProductId: (subscriptionProductId as SubscriptionProductId | null) ?? DEFAULT_STATE.subscriptionProductId,
-        latestReceipt: latestReceipt || DEFAULT_STATE.latestReceipt,
-        tokens: tokens ? Math.min(TOKEN_CAP, Number(tokens)) : DEFAULT_STATE.tokens,
-        goalMode: sanitizeGoalMode(goalMode),
-        history: parseHistory(historyRaw),
-        lastFreeClaim: lastFreeClaim || DEFAULT_STATE.lastFreeClaim,
+        subscriptionStatus: (subscriptionStatusSecure as SubscriptionStatus) || DEFAULT_STATE.subscriptionStatus,
+        validUntil: normalizeStored(validUntilSecure) || DEFAULT_STATE.validUntil,
+        lastVerified: normalizeStored(lastVerifiedSecure) || DEFAULT_STATE.lastVerified,
+        subscriptionProductId: (subscriptionProductIdSecure as SubscriptionProductId | null) ?? DEFAULT_STATE.subscriptionProductId,
+        latestReceipt: normalizeStored(latestReceiptSecure) || DEFAULT_STATE.latestReceipt,
+        tokens: tokensValue ? Math.min(TOKEN_CAP, Number(tokensValue)) : DEFAULT_STATE.tokens,
+        goalMode: sanitizeGoalMode(goalModeValue),
+        history: parseHistory(historyValue),
+        lastFreeClaim: normalizeStored(lastFreeClaimValue) || DEFAULT_STATE.lastFreeClaim,
       });
       setHydrated(true);
     })();
@@ -241,18 +324,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     (async () => {
       try {
         await Promise.all([
-          persistKey(STORAGE_KEYS.subscriptionStatus, state.subscriptionStatus),
-          persistKey(STORAGE_KEYS.validUntil, state.validUntil),
-          persistKey(STORAGE_KEYS.lastVerified, state.lastVerified),
-          persistKey(STORAGE_KEYS.subscriptionProductId, state.subscriptionProductId),
-          persistKey(STORAGE_KEYS.latestReceipt, state.latestReceipt),
-          persistKey(STORAGE_KEYS.tokens, String(state.tokens)),
-          persistKey(STORAGE_KEYS.goalMode, state.goalMode),
-          persistKey(STORAGE_KEYS.history, JSON.stringify(state.history)),
-          persistKey(STORAGE_KEYS.lastFreeClaim, state.lastFreeClaim),
+          persistSecure(STORAGE_KEYS.subscriptionStatus, state.subscriptionStatus),
+          persistSecure(STORAGE_KEYS.validUntil, state.validUntil),
+          persistSecure(STORAGE_KEYS.lastVerified, state.lastVerified),
+          persistSecure(STORAGE_KEYS.subscriptionProductId, state.subscriptionProductId),
+          persistSecure(STORAGE_KEYS.latestReceipt, state.latestReceipt),
+          persistAsync(STORAGE_KEYS.tokens, String(state.tokens)),
+          persistAsync(STORAGE_KEYS.goalMode, state.goalMode),
+          persistAsync(STORAGE_KEYS.history, JSON.stringify(state.history)),
+          persistAsync(STORAGE_KEYS.lastFreeClaim, state.lastFreeClaim),
         ]);
       } catch (err) {
-        console.warn('SecureStore batch write failed', err);
+        console.warn('State persistence failed', err);
       }
     })();
   }, [state, hydrated]);
@@ -262,11 +345,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setState((prev) => {
         const nextReceipt = payload.receipt ?? prev.latestReceipt ?? null;
         const nextLastVerified = payload.lastVerified ?? prev.lastVerified ?? null;
-        void persistKey(STORAGE_KEYS.subscriptionStatus, payload.status);
-        void persistKey(STORAGE_KEYS.validUntil, payload.validUntil);
-        void persistKey(STORAGE_KEYS.subscriptionProductId, payload.productId);
-        void persistKey(STORAGE_KEYS.latestReceipt, nextReceipt);
-        void persistKey(STORAGE_KEYS.lastVerified, nextLastVerified);
+        void persistSecure(STORAGE_KEYS.subscriptionStatus, payload.status);
+        void persistSecure(STORAGE_KEYS.validUntil, payload.validUntil);
+        void persistSecure(STORAGE_KEYS.subscriptionProductId, payload.productId);
+        void persistSecure(STORAGE_KEYS.latestReceipt, nextReceipt);
+        void persistSecure(STORAGE_KEYS.lastVerified, nextLastVerified);
         return {
           ...prev,
           subscriptionStatus: payload.status,
@@ -290,11 +373,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const verifiedIso = new Date().toISOString();
       setState((prev) => {
         const nextReceipt = receipt ?? prev.latestReceipt ?? null;
-        void persistKey(STORAGE_KEYS.subscriptionStatus, 'active');
-        void persistKey(STORAGE_KEYS.validUntil, validUntilIso);
-        void persistKey(STORAGE_KEYS.subscriptionProductId, productId);
-        void persistKey(STORAGE_KEYS.latestReceipt, nextReceipt);
-        void persistKey(STORAGE_KEYS.lastVerified, verifiedIso);
+        void persistSecure(STORAGE_KEYS.subscriptionStatus, 'active');
+        void persistSecure(STORAGE_KEYS.validUntil, validUntilIso);
+        void persistSecure(STORAGE_KEYS.subscriptionProductId, productId);
+        void persistSecure(STORAGE_KEYS.latestReceipt, nextReceipt);
+        void persistSecure(STORAGE_KEYS.lastVerified, verifiedIso);
         return {
           ...prev,
           subscriptionStatus: 'active',
@@ -317,11 +400,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       latestReceipt: null,
       lastVerified: null,
     }));
-    void persistKey(STORAGE_KEYS.subscriptionStatus, 'none');
-    void persistKey(STORAGE_KEYS.validUntil, null);
-    void persistKey(STORAGE_KEYS.subscriptionProductId, null);
-    void persistKey(STORAGE_KEYS.latestReceipt, null);
-    void persistKey(STORAGE_KEYS.lastVerified, null);
+    void persistSecure(STORAGE_KEYS.subscriptionStatus, 'none');
+    void persistSecure(STORAGE_KEYS.validUntil, null);
+    void persistSecure(STORAGE_KEYS.subscriptionProductId, null);
+    void persistSecure(STORAGE_KEYS.latestReceipt, null);
+    void persistSecure(STORAGE_KEYS.lastVerified, null);
   }, []);
 
   const setLastVerified = useCallback((iso: string) => {
@@ -329,7 +412,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (prev.lastVerified === iso) {
         return prev;
       }
-      void persistKey(STORAGE_KEYS.lastVerified, iso);
+      void persistSecure(STORAGE_KEYS.lastVerified, iso);
       return { ...prev, lastVerified: iso };
     });
   }, []);
@@ -341,7 +424,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (nextTokens === prev.tokens) {
         return prev;
       }
-      void persistKey(STORAGE_KEYS.tokens, String(nextTokens));
+      void persistAsync(STORAGE_KEYS.tokens, String(nextTokens));
       return { ...prev, tokens: nextTokens };
     });
   }, []);
@@ -364,59 +447,85 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return prev;
     });
     if (nextTokenValue != null) {
-      void persistKey(STORAGE_KEYS.tokens, String(nextTokenValue));
+      void persistAsync(STORAGE_KEYS.tokens, String(nextTokenValue));
     }
     return allowed;
   }, []);
 
   const setGoalMode = useCallback((mode: GoalMode) => {
-    setState((prev) => ({ ...prev, goalMode: mode }));
+    setState((prev) => {
+      if (prev.goalMode === mode) {
+        return prev;
+      }
+      void persistAsync(STORAGE_KEYS.goalMode, mode);
+      return { ...prev, goalMode: mode };
+    });
   }, []);
 
   const addOrUpdateScanResult = useCallback((result: ScanResult) => {
     setState((prev) => {
       const without = prev.history.filter((entry) => entry.id !== result.id);
+      const nextHistory = [result, ...without].slice(0, HISTORY_LIMIT);
+      void persistAsync(STORAGE_KEYS.history, JSON.stringify(nextHistory));
       return {
         ...prev,
-        history: [result, ...without].slice(0, HISTORY_LIMIT),
+        history: nextHistory,
       };
     });
   }, []);
 
   const removeScanResult = useCallback((id: string) => {
-    setState((prev) => ({ ...prev, history: prev.history.filter((entry) => entry.id !== id) }));
+    setState((prev) => {
+      const nextHistory = prev.history.filter((entry) => entry.id !== id);
+      if (nextHistory.length === prev.history.length) {
+        return prev;
+      }
+      void persistAsync(STORAGE_KEYS.history, JSON.stringify(nextHistory));
+      return { ...prev, history: nextHistory };
+    });
   }, []);
 
   const clearHistory = useCallback(() => {
-    setState((prev) => ({ ...prev, history: [] }));
+    setState((prev) => {
+      if (prev.history.length === 0) {
+        return prev;
+      }
+      void persistAsync(STORAGE_KEYS.history, JSON.stringify([]));
+      return { ...prev, history: [] };
+    });
   }, []);
 
   const claimFreeTokens = useCallback(async () => {
-    let updated: { tokens: number; lastFreeClaim: string } | null = null;
+    const now = Date.now();
+    let nextTokensValue: number | null = null;
+    let nextClaimIso: string | null = null;
+
     setState((prev) => {
       if (prev.tokens >= TOKEN_CAP) {
         return prev;
       }
-      const now = Date.now();
       const lastClaimMs = prev.lastFreeClaim ? new Date(prev.lastFreeClaim).getTime() : NaN;
       const cooldownReady = !Number.isFinite(lastClaimMs) || now - lastClaimMs >= FREE_CLAIM_INTERVAL_MS;
       if (!cooldownReady) {
         return prev;
       }
-      const nextTokens = Math.min(TOKEN_CAP, prev.tokens + FREE_CLAIM_AMOUNT);
-      const nextClaim = new Date(now).toISOString();
-      updated = { tokens: nextTokens, lastFreeClaim: nextClaim };
+      const computedTokens = Math.min(TOKEN_CAP, prev.tokens + FREE_CLAIM_AMOUNT);
+      const computedClaimIso = new Date(now).toISOString();
+      nextTokensValue = computedTokens;
+      nextClaimIso = computedClaimIso;
       return {
         ...prev,
-        tokens: nextTokens,
-        lastFreeClaim: nextClaim,
+        tokens: computedTokens,
+        lastFreeClaim: computedClaimIso,
       };
     });
-    if (!updated) {
+
+    if (nextTokensValue == null || nextClaimIso == null) {
       return false;
     }
-    await persistKey(STORAGE_KEYS.tokens, String(updated.tokens));
-    await persistKey(STORAGE_KEYS.lastFreeClaim, updated.lastFreeClaim);
+
+    await persistAsync(STORAGE_KEYS.tokens, String(nextTokensValue));
+    await persistAsync(STORAGE_KEYS.lastFreeClaim, nextClaimIso);
     return true;
   }, []);
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { View, Text, Button, Alert, TextInput, Modal, TouchableOpacity } from 'react-native';
+import { View, Text, Button, Alert, TextInput, Modal, TouchableOpacity, Linking } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { runMockOcrAsync } from '../utils/mockOcr';
@@ -26,12 +26,23 @@ export default function ScanScreen() {
 
   const onCapture = useCallback(async () => {
     if (!permission?.granted) {
+      if (permission && permission.canAskAgain === false) {
+        Alert.alert(
+          'Camera access disabled',
+          'Enable camera access from iOS Settings to capture new scans.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ]
+        );
+        return;
+      }
       const res = await requestPermission();
       if (!res.granted) return;
     }
     const allowed = subscriptionStatus === 'active' ? true : consumeToken();
     if (!allowed) {
-      Alert.alert('No access', 'Watch an ad for tokens or subscribe.');
+      Alert.alert('No scan tokens', 'Visit the Account tab to claim free tokens or subscribe for unlimited scans.');
       return;
     }
     try {
@@ -54,7 +65,10 @@ export default function ScanScreen() {
 
   const onUpload = useCallback(async () => {
     const allowed = subscriptionStatus === 'active' ? true : consumeToken();
-    if (!allowed) { Alert.alert('No access', 'Watch an ad for tokens or subscribe.'); return; }
+    if (!allowed) {
+      Alert.alert('No scan tokens', 'Visit the Account tab to claim free tokens or subscribe for unlimited scans.');
+      return;
+    }
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 });
     if (res.canceled) return;
     const asset = res.assets[0];
@@ -99,9 +113,17 @@ export default function ScanScreen() {
         {permission?.granted ? (
           <CameraView ref={cameraRef} style={{ flex: 1 }} facing="back" />
         ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={{ color: '#fff', marginBottom: 12 }}>Camera permission required</Text>
-            <Button title="Grant Permission" onPress={() => requestPermission()} />
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 }}>
+            <Text style={{ color: '#fff', textAlign: 'center', marginBottom: 16 }}>
+              Cutly uses your camera to capture nutrition labels so we can calculate value metrics. You can also choose a photo from your gallery.
+            </Text>
+            {permission?.canAskAgain === false ? (
+              <Button title="Open Settings" onPress={() => Linking.openSettings()} />
+            ) : (
+              <Button title="Continue" onPress={() => requestPermission()} />
+            )}
+            <View style={{ height: 12 }} />
+            <Button title="Use Gallery Instead" onPress={onUpload} />
           </View>
         )}
       </View>

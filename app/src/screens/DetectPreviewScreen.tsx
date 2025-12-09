@@ -76,10 +76,11 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
         if (servingsReading?.numeric?.value != null && servingsReading.combinedConfidence >= CONFIDENCE_THRESHOLD) {
           setServings(String(servingsReading.numeric.value));
         }
-        if (servingSizeReading?.numeric?.quantity != null && servingSizeReading.combinedConfidence >= CONFIDENCE_THRESHOLD) {
-          setServingQuantity(String(servingSizeReading.numeric.quantity));
+        const servingNumeric: any = servingSizeReading?.numeric;
+        if (servingSizeReading && servingNumeric?.quantity != null && servingSizeReading.combinedConfidence >= CONFIDENCE_THRESHOLD) {
+          setServingQuantity(String(servingNumeric.quantity));
         }
-        const unitText = (servingSizeReading?.numeric as any)?.unitText ?? servingSizeReading?.numeric?.unit;
+        const unitText = servingNumeric?.unitText ?? servingNumeric?.unit;
         if (unitText) {
           setServingUnit(unitText);
         }
@@ -181,8 +182,8 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
         calories: caloriesReading?.numeric?.value,
         protein: proteinReading?.numeric?.value,
         servings: servingsReading?.numeric?.value,
-        servingQty: servingSizeReading?.numeric?.quantity,
-        servingUnit: (servingSizeReading?.numeric as any)?.unitText ?? servingSizeReading?.numeric?.unit,
+        servingQty: (servingSizeReading?.numeric as any)?.quantity,
+        servingUnit: (servingSizeReading?.numeric as any)?.unitText ?? (servingSizeReading?.numeric as any)?.unit,
         servingAlt: servingAltReading?.numeric?.value,
         servingAltUnit: servingAltReading?.numeric?.unit,
       });
@@ -274,7 +275,7 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
         </View>
 
         <View style={{ marginTop: 12 }}>
-          <Text style={{ fontWeight: '600', marginBottom: 4 }}>Auto-recognized fields</Text>
+          <Text style={{ fontWeight: '600', marginBottom: 4, color: '#fff' }}>Auto-recognized fields</Text>
           {fieldStates.map((field) => {
             const reading = field.reading;
             const low = (reading?.combinedConfidence ?? 0) < CONFIDENCE_THRESHOLD;
@@ -290,9 +291,9 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
                   backgroundColor: low ? '#fff5f5' : '#f8f9fb',
                 }}
               >
-                <Text style={{ fontWeight: '500' }}>{field.label}</Text>
-                <Text style={{ fontSize: 12, color: low ? '#ff3b30' : '#8e8e93' }}>{confidenceLabel(reading)}</Text>
-                <Text style={{ fontSize: 12, color: '#636366', marginTop: 2 }}>{reading?.rawText || '—'}</Text>
+                <Text style={{ fontWeight: '500', color: '#111827' }}>{field.label}</Text>
+                <Text style={{ fontSize: 12, color: low ? '#ff3b30' : '#6b7280' }}>{confidenceLabel(reading)}</Text>
+                <Text style={{ fontSize: 12, color: '#374151', marginTop: 2 }}>{reading?.rawText || '—'}</Text>
               </View>
             );
           })}
@@ -310,83 +311,90 @@ export default function DetectPreviewScreen({ route, navigation }: any) {
         ) : null}
 
         <View style={{ marginTop: 16 }}>
-          <Text style={{ marginBottom: 4, fontWeight: '600' }}>Manual review</Text>
+          <Text style={{ marginBottom: 4, fontWeight: '600', color: '#fff' }}>Manual review</Text>
           {flaggedKeys.size === 0 ? (
-            <Text style={{ fontSize: 12, color: '#636366', marginBottom: 12 }}>All key fields look good. Tap continue if you'd like to review or edit anyway.</Text>
+            <Text style={{ fontSize: 12, color: '#d1d5db', marginBottom: 12 }}>All key fields look good. Tap continue if you'd like to review or edit anyway.</Text>
           ) : null}
 
           <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 12 }}>
             {needsCalories ? (
               <View style={{ flexDirection: 'column', minWidth: '30%' }}>
-                <Text>Calories</Text>
+                <Text style={{ color: '#fff', marginBottom: 4 }}>Calories</Text>
                 <TextInput
                   value={calories}
                   onChangeText={setCalories}
                   keyboardType="number-pad"
                   placeholder="e.g. 200"
-                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }}
+                  placeholderTextColor="#9ca3af"
+                  style={{ borderWidth: 1, borderColor: '#fff', borderRadius: 4, padding: 6, color: '#fff', backgroundColor: 'rgba(255,255,255,0.08)' }}
                 />
               </View>
             ) : null}
             {needsProtein ? (
               <View style={{ flexDirection: 'column', minWidth: '30%' }}>
-                <Text>Protein (g)</Text>
+                <Text style={{ color: '#fff', marginBottom: 4 }}>Protein (g)</Text>
                 <TextInput
                   value={protein}
                   onChangeText={setProtein}
                   keyboardType="number-pad"
                   placeholder="e.g. 8"
-                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }}
+                  placeholderTextColor="#9ca3af"
+                  style={{ borderWidth: 1, borderColor: '#fff', borderRadius: 4, padding: 6, color: '#fff', backgroundColor: 'rgba(255,255,255,0.08)' }}
                 />
               </View>
             ) : null}
             {needsServings ? (
               <View style={{ flexDirection: 'column', minWidth: '30%' }}>
-                <Text>Servings</Text>
+                <Text style={{ color: '#fff', marginBottom: 4 }}>Servings</Text>
                 <TextInput
                   value={servings}
                   onChangeText={setServings}
                   keyboardType="decimal-pad"
                   placeholder="e.g. 10"
-                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }}
+                  placeholderTextColor="#9ca3af"
+                  style={{ borderWidth: 1, borderColor: '#fff', borderRadius: 4, padding: 6, color: '#fff', backgroundColor: 'rgba(255,255,255,0.08)' }}
                 />
               </View>
             ) : null}
             {needsServingSize ? (
               <View style={{ flexDirection: 'column', minWidth: '45%' }}>
-                <Text>Serving size qty</Text>
+                <Text style={{ color: '#fff', marginBottom: 4 }}>Serving size qty</Text>
                 <TextInput
                   value={servingQuantity}
                   onChangeText={setServingQuantity}
                   keyboardType="decimal-pad"
                   placeholder="e.g. 0.75"
-                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, marginBottom: 6 }}
+                  placeholderTextColor="#9ca3af"
+                  style={{ borderWidth: 1, borderColor: '#fff', borderRadius: 4, padding: 6, marginBottom: 6, color: '#fff', backgroundColor: 'rgba(255,255,255,0.08)' }}
                 />
-                <Text>Serving size unit</Text>
+                <Text style={{ color: '#fff', marginBottom: 4 }}>Serving size unit</Text>
                 <TextInput
                   value={servingUnit}
                   onChangeText={setServingUnit}
                   placeholder="e.g. cup"
-                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }}
+                  placeholderTextColor="#9ca3af"
+                  style={{ borderWidth: 1, borderColor: '#fff', borderRadius: 4, padding: 6, color: '#fff', backgroundColor: 'rgba(255,255,255,0.08)' }}
                 />
               </View>
             ) : null}
             {needsServingAlt ? (
               <View style={{ flexDirection: 'column', minWidth: '45%' }}>
-                <Text>Serving size alt (g/ml)</Text>
+                <Text style={{ color: '#fff', marginBottom: 4 }}>Serving size alt (g/ml)</Text>
                 <TextInput
                   value={servingAlt}
                   onChangeText={setServingAlt}
                   keyboardType="decimal-pad"
                   placeholder="e.g. 228"
-                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6, marginBottom: 6 }}
+                  placeholderTextColor="#9ca3af"
+                  style={{ borderWidth: 1, borderColor: '#fff', borderRadius: 4, padding: 6, marginBottom: 6, color: '#fff', backgroundColor: 'rgba(255,255,255,0.08)' }}
                 />
-                <Text>Alt unit</Text>
+                <Text style={{ color: '#fff', marginBottom: 4 }}>Alt unit</Text>
                 <TextInput
                   value={servingAltUnit}
                   onChangeText={setServingAltUnit}
                   placeholder="e.g. g"
-                  style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 6 }}
+                  placeholderTextColor="#9ca3af"
+                  style={{ borderWidth: 1, borderColor: '#fff', borderRadius: 4, padding: 6, color: '#fff', backgroundColor: 'rgba(255,255,255,0.08)' }}
                 />
               </View>
             ) : null}

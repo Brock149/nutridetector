@@ -8,6 +8,7 @@ import {
   SafeAreaView,
   StyleSheet,
   TouchableOpacity,
+  Linking,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
 import { useFocusEffect } from '@react-navigation/native';
@@ -38,6 +39,18 @@ const DANGER_TEXT = '#ff9a9a';
 const TOKEN_CAP = 20;
 const FREE_CLAIM_AMOUNT = 10;
 const FREE_CLAIM_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const TERMS_URL = 'https://bactech.online/terms.html';
+const PRIVACY_URL = 'https://bactech.online/privacy.html';
+
+type UiProduct = {
+  productId: SubscriptionProductId;
+  durationDays: number;
+  displayName: string;
+  marketingBlurb: string;
+  priceLabel: string;
+  localizedTitle: string;
+  localizedDescription: string;
+};
 
 
 export default function AccountScreen() {
@@ -57,12 +70,6 @@ export default function AccountScreen() {
   const [products, setProducts] = useState<SubscriptionProductInfo[]>([]);
   const [initialised, setInitialised] = useState(false);
   const lastRestoreRef = useRef<number>(0);
-
-type UiProduct = (typeof SUBSCRIPTION_PRODUCTS)[number] & {
-  localizedTitle: string;
-  localizedDescription: string;
-  priceLabel: string;
-};
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
@@ -138,17 +145,20 @@ type UiProduct = (typeof SUBSCRIPTION_PRODUCTS)[number] & {
     }, [initialised, subscriptionStatus, markSubscriptionFromPurchase, setSubscription, setLastVerified, restoreSubscriptions])
   );
 
-  const uiProducts = useMemo<UiProduct[]>(() => {
-    return SUBSCRIPTION_PRODUCTS.map((meta) => {
+  const uiProducts = useMemo<UiProduct[]>(() =>
+    SUBSCRIPTION_PRODUCTS.map((meta) => {
       const match = products.find((item) => item.id === meta.productId);
       return {
-        ...meta,
+        productId: meta.productId,
+        durationDays: meta.durationDays,
+        displayName: meta.displayName,
+        marketingBlurb: meta.marketingBlurb,
+        priceLabel: match?.displayPrice ?? meta.priceLabel,
         localizedTitle: match?.displayName ?? match?.title ?? meta.displayName,
         localizedDescription: match?.description ?? meta.marketingBlurb,
-        priceLabel: match?.displayPrice ?? meta.marketingBlurb,
-      } satisfies UiProduct;
-    });
-  }, [products]);
+      };
+    })
+  , [products]);
 
   const handleSubscribe = async (productId: string) => {
     try {
@@ -225,6 +235,14 @@ type UiProduct = (typeof SUBSCRIPTION_PRODUCTS)[number] & {
     }
   }, [canClaimTokens, claimFreeTokens]);
 
+  const handleOpenUrl = useCallback(async (url: string) => {
+    try {
+      await Linking.openURL(url);
+    } catch (err) {
+      Alert.alert('Unable to open link', 'Please try again later.');
+    }
+  }, []);
+
   return (
     <LinearGradient colors={[BRAND_SLATE, PANEL_SLATE]} style={styles.gradient}>
       <SafeAreaView style={styles.safeArea}>
@@ -300,10 +318,28 @@ type UiProduct = (typeof SUBSCRIPTION_PRODUCTS)[number] & {
             <AccountButton
               label="Restore Purchases"
               onPress={handleRestore}
-              disabled={!initialised}
+            disabled={!initialised}
               tone="secondary"
             />
-          <AccountButton label="Clear Local Access" onPress={handleSignOut} tone="danger" />
+            <AccountButton label="Clear Local Access" onPress={handleSignOut} tone="danger" />
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Legal</Text>
+            <Text style={styles.sectionDescription}>Review our policies before you subscribe.</Text>
+            <AccountButton
+              label="Terms of Use"
+              onPress={() => handleOpenUrl(TERMS_URL)}
+              tone="ghost"
+            />
+            <AccountButton
+              label="Privacy Policy"
+              onPress={() => handleOpenUrl(PRIVACY_URL)}
+              tone="ghost"
+            />
+            <Text style={styles.legalHint}>
+              Subscriptions are billed through Apple and renew automatically. Manage or cancel anytime in Settings {'>'} Apple ID {'>'} Subscriptions.
+            </Text>
           </View>
 
         </ScrollView>
@@ -531,6 +567,11 @@ const styles = StyleSheet.create({
   },
   buttonLabelGhost: {
     color: TEXT_MUTED,
+  },
+  legalHint: {
+    fontSize: 12,
+    color: TEXT_SOFT,
+    lineHeight: 18,
   },
   claimBlock: {
     marginTop: 16,

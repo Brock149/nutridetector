@@ -37,6 +37,13 @@ type MealSliderProps = {
   onChange: (value: number) => void;
 };
 
+type MetricDescriptor = {
+  key: string;
+  label: string;
+  value: string;
+  suffix?: string;
+};
+
 const clamp = (val: number, min: number, max: number) => Math.min(max, Math.max(min, val));
 
 function snapToStep(value: number, min: number, max: number, step: number): number {
@@ -47,8 +54,8 @@ function snapToStep(value: number, min: number, max: number, step: number): numb
   return clamp(fixed, min, max);
 }
 
-const PANEL_GRADIENT = ['#123130', '#102624'];
-const HERO_GRADIENT = ['#1f6154', '#154238'];
+const PANEL_GRADIENT = ['#123130', '#102624'] as const;
+const HERO_GRADIENT = ['#1f6154', '#154238'] as const;
 const PRIMARY_TEXT = '#f6fffb';
 const MUTED_TEXT = 'rgba(246,255,251,0.68)';
 
@@ -360,7 +367,7 @@ export default function ResultsScreen() {
     });
   }, [buildScanResult, addOrUpdateScanResult, navigation]);
 
-  const topMetrics = useMemo(
+  const topMetrics = useMemo<MetricDescriptor[]>(
     () => [
       { key: 'costPerDollar', label: 'Cost per dollar', value: formatCurrency(price) },
       { key: 'costPerMeal', label: 'Cost per meal', value: formatCurrency(metrics.costPerMeal) },
@@ -369,7 +376,7 @@ export default function ResultsScreen() {
     [price, metrics.costPerMeal, metrics.caloriesPerProtein]
   );
 
-  const supportingMetrics = useMemo(
+  const supportingMetrics = useMemo<MetricDescriptor[]>(
     () => [
       { key: 'proteinPerDollar', label: 'Protein per dollar', value: formatNumber(metrics.proteinPerDollar, 1), suffix: 'g' },
       { key: 'caloriesPerDollar', label: 'Calories per dollar', value: formatNumber(metrics.caloriesPerDollar, 0), suffix: 'cals' },
@@ -381,8 +388,8 @@ export default function ResultsScreen() {
     [metrics, calories, proteinGrams]
   );
 
-  const statRows = useMemo(() => {
-    const rows: typeof supportingMetrics[][] = [];
+  const statRows = useMemo<MetricDescriptor[][]>(() => {
+    const rows: MetricDescriptor[][] = [];
     for (let i = 0; i < supportingMetrics.length; i += 3) {
       rows.push(supportingMetrics.slice(i, i + 3));
     }
