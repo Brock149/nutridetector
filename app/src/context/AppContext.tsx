@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SUBSCRIPTION_PRODUCTS, SubscriptionProductId } from '../constants/subscriptions';
+import { storage } from '../utils/storage';
 
 type SubscriptionStatus = 'active' | 'expired' | 'none';
 type GoalMode = 'bulk' | 'cut';
@@ -40,6 +40,14 @@ type ScanResult = {
   servingSizeAlt?: ServingAltInfo;
 };
 
+type UserProfile = {
+  currentWeight?: number;
+  goalWeight?: number;
+  weeklyBudgetDollars?: number;
+  calorieTarget?: number;
+  name?: string;
+};
+
 type AppState = {
   subscriptionStatus: SubscriptionStatus;
   validUntil: string | null;
@@ -50,6 +58,8 @@ type AppState = {
   goalMode: GoalMode;
   history: ScanResult[];
   lastFreeClaim: string | null;
+  onboardingComplete: boolean;
+  profile: UserProfile;
 };
 
 type AppContextType = AppState & {
@@ -74,6 +84,8 @@ type AppContextType = AppState & {
   removeScanResult: (id: string) => void;
   clearHistory: () => void;
   claimFreeTokens: () => Promise<boolean>;
+  setProfile: (updates: Partial<UserProfile>) => void;
+  completeOnboarding: () => void;
 };
 
 const DEFAULT_STATE: AppState = {
@@ -86,9 +98,27 @@ const DEFAULT_STATE: AppState = {
   goalMode: 'cut',
   history: [],
   lastFreeClaim: null,
+  onboardingComplete: false,
+  profile: {},
 };
 
+// Underscore-only keys to satisfy SecureStore rules (alphanumeric, '.', '-', '_')
 const STORAGE_KEYS = {
+  subscriptionStatus: 'app_subscription_status',
+  validUntil: 'app_valid_until',
+  lastVerified: 'app_last_verified',
+  subscriptionProductId: 'app_subscription_product_id',
+  latestReceipt: 'app_subscription_receipt',
+  tokens: 'app_tokens',
+  goalMode: 'app_goal_mode',
+  history: 'app_history',
+  lastFreeClaim: 'app_last_free_claim',
+  onboardingComplete: 'app_onboarding_complete',
+  profile: 'app_profile',
+};
+
+// Legacy keys that contained slashes; kept for migration
+const LEGACY_STORAGE_KEYS = {
   subscriptionStatus: 'app/subscription_status',
   validUntil: 'app/valid_until',
   lastVerified: 'app/last_verified',
@@ -98,6 +128,8 @@ const STORAGE_KEYS = {
   goalMode: 'app/goal_mode',
   history: 'app/history',
   lastFreeClaim: 'app/last_free_claim',
+  onboardingComplete: 'app/onboarding_complete',
+  profile: 'app/profile',
 };
 
 const HISTORY_LIMIT = 50;
@@ -107,6 +139,16 @@ const FREE_CLAIM_AMOUNT = 10;
 const FREE_CLAIM_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+const safeSecureGet = async (key: string): Promise<string | null> => {
+  try {
+    const v = await SecureStore.getItemAsync(key);
+    return v ?? null;
+  } catch (err) {
+    console.warn('SecureStore read failed', key, err);
+    return null;
+  }
+};
 
 const persistSecure = async (key: string, value: string | null) => {
   try {
@@ -122,13 +164,9 @@ const persistSecure = async (key: string, value: string | null) => {
 
 const persistAsync = async (key: string, value: string | null) => {
   try {
-    if (value == null) {
-      await AsyncStorage.removeItem(key);
-    } else {
-      await AsyncStorage.setItem(key, value);
-    }
+    await storage.setItem(key, value);
   } catch (err) {
-    console.warn('AsyncStorage write failed', key, err);
+    console.warn('Async persistence failed', key, err);
   }
 };
 
@@ -202,12 +240,35 @@ const parseHistory = (raw: string | null): ScanResult[] => {
   return [];
 };
 
+const parseProfile = (raw: string | null): UserProfile => {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    const maybeNumber = (val: any): number | undefined => {
+      const n = Number(val);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    return {
+      currentWeight: maybeNumber(parsed.currentWeight),
+      goalWeight: maybeNumber(parsed.goalWeight),
+      weeklyBudgetDollars: maybeNumber(parsed.weeklyBudgetDollars),
+      calorieTarget: maybeNumber(parsed.calorieTarget),
+      name: typeof parsed.name === 'string' ? parsed.name : undefined,
+    };
+  } catch (err) {
+    console.warn('Failed to parse profile store', err);
+    return {};
+  }
+};
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<AppState>(DEFAULT_STATE);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
+      try {
       const [
         subscriptionStatusSecure,
         validUntilSecure,
@@ -218,88 +279,160 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         goalModeSecure,
         historySecure,
         lastFreeClaimSecure,
+        onboardingCompleteSecure,
+        profileSecure,
+        legacySubscriptionStatusSecure,
+        legacyValidUntilSecure,
+        legacyLastVerifiedSecure,
+        legacySubscriptionProductIdSecure,
+        legacyLatestReceiptSecure,
+        legacyTokensSecure,
+        legacyGoalModeSecure,
+        legacyHistorySecure,
+        legacyLastFreeClaimSecure,
+        legacyOnboardingCompleteSecure,
+        legacyProfileSecure,
       ] = await Promise.all([
-        SecureStore.getItemAsync(STORAGE_KEYS.subscriptionStatus),
-        SecureStore.getItemAsync(STORAGE_KEYS.validUntil),
-        SecureStore.getItemAsync(STORAGE_KEYS.lastVerified),
-        SecureStore.getItemAsync(STORAGE_KEYS.subscriptionProductId),
-        SecureStore.getItemAsync(STORAGE_KEYS.latestReceipt),
-        SecureStore.getItemAsync(STORAGE_KEYS.tokens),
-        SecureStore.getItemAsync(STORAGE_KEYS.goalMode),
-        SecureStore.getItemAsync(STORAGE_KEYS.history),
-        SecureStore.getItemAsync(STORAGE_KEYS.lastFreeClaim),
+        safeSecureGet(STORAGE_KEYS.subscriptionStatus),
+        safeSecureGet(STORAGE_KEYS.validUntil),
+        safeSecureGet(STORAGE_KEYS.lastVerified),
+        safeSecureGet(STORAGE_KEYS.subscriptionProductId),
+        safeSecureGet(STORAGE_KEYS.latestReceipt),
+        safeSecureGet(STORAGE_KEYS.tokens),
+        safeSecureGet(STORAGE_KEYS.goalMode),
+        safeSecureGet(STORAGE_KEYS.history),
+        safeSecureGet(STORAGE_KEYS.lastFreeClaim),
+        safeSecureGet(STORAGE_KEYS.onboardingComplete),
+        safeSecureGet(STORAGE_KEYS.profile),
+        safeSecureGet(LEGACY_STORAGE_KEYS.subscriptionStatus),
+        safeSecureGet(LEGACY_STORAGE_KEYS.validUntil),
+        safeSecureGet(LEGACY_STORAGE_KEYS.lastVerified),
+        safeSecureGet(LEGACY_STORAGE_KEYS.subscriptionProductId),
+        safeSecureGet(LEGACY_STORAGE_KEYS.latestReceipt),
+        safeSecureGet(LEGACY_STORAGE_KEYS.tokens),
+        safeSecureGet(LEGACY_STORAGE_KEYS.goalMode),
+        safeSecureGet(LEGACY_STORAGE_KEYS.history),
+        safeSecureGet(LEGACY_STORAGE_KEYS.lastFreeClaim),
+        safeSecureGet(LEGACY_STORAGE_KEYS.onboardingComplete),
+        safeSecureGet(LEGACY_STORAGE_KEYS.profile),
       ]);
 
-      const asyncPairs = await AsyncStorage.multiGet([
-        STORAGE_KEYS.tokens,
-        STORAGE_KEYS.goalMode,
-        STORAGE_KEYS.history,
-        STORAGE_KEYS.lastFreeClaim,
-      ]);
-      const asyncMap = Object.fromEntries(asyncPairs.map(([key, value]) => [key, value ?? null])) as Record<string, string | null>;
+        const asyncPairs = await storage.multiGet([
+          STORAGE_KEYS.tokens,
+          STORAGE_KEYS.goalMode,
+          STORAGE_KEYS.history,
+          STORAGE_KEYS.lastFreeClaim,
+          STORAGE_KEYS.onboardingComplete,
+          STORAGE_KEYS.profile,
+        LEGACY_STORAGE_KEYS.tokens,
+        LEGACY_STORAGE_KEYS.goalMode,
+        LEGACY_STORAGE_KEYS.history,
+        LEGACY_STORAGE_KEYS.lastFreeClaim,
+        LEGACY_STORAGE_KEYS.onboardingComplete,
+        LEGACY_STORAGE_KEYS.profile,
+        ]);
+        const asyncMap = Object.fromEntries(asyncPairs.map(([key, value]) => [key, value ?? null])) as Record<string, string | null>;
 
-      const normalizeStored = (value: string | null | undefined): string | null => {
-        if (value == null || value === '') return null;
-        return value;
-      };
+        const normalizeStored = (value: string | null | undefined): string | null => {
+          if (value == null || value === '') return null;
+          return value;
+        };
 
-      const tokensFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.tokens]);
-      const tokensFromSecure = normalizeStored(tokensSecure);
-      const goalModeFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.goalMode]);
-      const goalModeFromSecure = normalizeStored(goalModeSecure);
-      const historyFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.history]);
-      const historyFromSecure = normalizeStored(historySecure);
-      const lastFreeClaimFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.lastFreeClaim]);
-      const lastFreeClaimFromSecure = normalizeStored(lastFreeClaimSecure);
+        const tokensFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.tokens]) ?? normalizeStored(asyncMap[LEGACY_STORAGE_KEYS.tokens]);
+        const tokensFromSecure = normalizeStored(tokensSecure) ?? normalizeStored(legacyTokensSecure);
+        const goalModeFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.goalMode]) ?? normalizeStored(asyncMap[LEGACY_STORAGE_KEYS.goalMode]);
+        const goalModeFromSecure = normalizeStored(goalModeSecure) ?? normalizeStored(legacyGoalModeSecure);
+        const historyFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.history]) ?? normalizeStored(asyncMap[LEGACY_STORAGE_KEYS.history]);
+        const historyFromSecure = normalizeStored(historySecure) ?? normalizeStored(legacyHistorySecure);
+        const lastFreeClaimFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.lastFreeClaim]) ?? normalizeStored(asyncMap[LEGACY_STORAGE_KEYS.lastFreeClaim]);
+        const lastFreeClaimFromSecure = normalizeStored(lastFreeClaimSecure) ?? normalizeStored(legacyLastFreeClaimSecure);
+        const onboardingFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.onboardingComplete]) ?? normalizeStored(asyncMap[LEGACY_STORAGE_KEYS.onboardingComplete]);
+        const onboardingFromSecure = normalizeStored(onboardingCompleteSecure) ?? normalizeStored(legacyOnboardingCompleteSecure);
+        const profileFromAsync = normalizeStored(asyncMap[STORAGE_KEYS.profile]) ?? normalizeStored(asyncMap[LEGACY_STORAGE_KEYS.profile]);
+        const profileFromSecure = normalizeStored(profileSecure) ?? normalizeStored(legacyProfileSecure);
+        const subscriptionStatusFromSecure = normalizeStored(subscriptionStatusSecure) ?? normalizeStored(legacySubscriptionStatusSecure);
+        const validUntilFromSecure = normalizeStored(validUntilSecure) ?? normalizeStored(legacyValidUntilSecure);
+        const lastVerifiedFromSecure = normalizeStored(lastVerifiedSecure) ?? normalizeStored(legacyLastVerifiedSecure);
+        const subscriptionProductIdFromSecure = normalizeStored(subscriptionProductIdSecure) ?? normalizeStored(legacySubscriptionProductIdSecure);
+        const latestReceiptFromSecure = normalizeStored(latestReceiptSecure) ?? normalizeStored(legacyLatestReceiptSecure);
 
-      const tokensValue = tokensFromAsync ?? tokensFromSecure;
-      const goalModeValue = goalModeFromAsync ?? goalModeFromSecure;
-      const historyValue = historyFromAsync ?? historyFromSecure;
-      const lastFreeClaimValue = lastFreeClaimFromAsync ?? lastFreeClaimFromSecure;
+        const tokensValue = tokensFromAsync ?? tokensFromSecure;
+        const goalModeValue = goalModeFromAsync ?? goalModeFromSecure;
+        const historyValue = historyFromAsync ?? historyFromSecure;
+        const lastFreeClaimValue = lastFreeClaimFromAsync ?? lastFreeClaimFromSecure;
+        const onboardingValue = onboardingFromAsync ?? onboardingFromSecure;
+        const profileValue = profileFromAsync ?? profileFromSecure;
 
-      const migrations: Promise<void>[] = [];
-      if (tokensValue != null && tokensFromAsync == null) {
-        migrations.push(persistAsync(STORAGE_KEYS.tokens, tokensValue));
-      }
-      if (tokensFromSecure != null && tokensFromAsync == null) {
-        migrations.push(persistSecure(STORAGE_KEYS.tokens, null));
-      }
-      if (goalModeValue != null && goalModeFromAsync == null) {
-        migrations.push(persistAsync(STORAGE_KEYS.goalMode, goalModeValue));
-      }
-      if (goalModeFromSecure != null && goalModeFromAsync == null) {
-        migrations.push(persistSecure(STORAGE_KEYS.goalMode, null));
-      }
-      if (historyValue != null && historyFromAsync == null) {
-        migrations.push(persistAsync(STORAGE_KEYS.history, historyValue));
-      }
-      if (historyFromSecure != null && historyFromAsync == null) {
-        migrations.push(persistSecure(STORAGE_KEYS.history, null));
-      }
-      if (lastFreeClaimValue != null && lastFreeClaimFromAsync == null) {
-        migrations.push(persistAsync(STORAGE_KEYS.lastFreeClaim, lastFreeClaimValue));
-      }
-      if (lastFreeClaimFromSecure != null && lastFreeClaimFromAsync == null) {
-        migrations.push(persistSecure(STORAGE_KEYS.lastFreeClaim, null));
-      }
+        const migrations: Promise<void>[] = [];
+        // Migrate legacy -> new keys
+        const migrateIfLegacy = (value: string | null, fromAsync: string | null, legacyKey: string, newKey: string) => {
+          if (value != null && fromAsync == null && asyncMap[newKey] == null) {
+            migrations.push(persistAsync(newKey, value));
+          }
+          if (legacyKey && asyncMap[legacyKey] != null) {
+            migrations.push(persistAsync(legacyKey, null));
+          }
+        };
 
-      if (migrations.length > 0) {
-        await Promise.all(migrations);
-      }
+        migrateIfLegacy(tokensValue, tokensFromAsync, LEGACY_STORAGE_KEYS.tokens, STORAGE_KEYS.tokens);
+        migrateIfLegacy(goalModeValue, goalModeFromAsync, LEGACY_STORAGE_KEYS.goalMode, STORAGE_KEYS.goalMode);
+        migrateIfLegacy(historyValue, historyFromAsync, LEGACY_STORAGE_KEYS.history, STORAGE_KEYS.history);
+        migrateIfLegacy(lastFreeClaimValue, lastFreeClaimFromAsync, LEGACY_STORAGE_KEYS.lastFreeClaim, STORAGE_KEYS.lastFreeClaim);
+        migrateIfLegacy(onboardingValue, onboardingFromAsync, LEGACY_STORAGE_KEYS.onboardingComplete, STORAGE_KEYS.onboardingComplete);
+        migrateIfLegacy(profileValue, profileFromAsync, LEGACY_STORAGE_KEYS.profile, STORAGE_KEYS.profile);
 
-      setState({
-        subscriptionStatus: (subscriptionStatusSecure as SubscriptionStatus) || DEFAULT_STATE.subscriptionStatus,
-        validUntil: normalizeStored(validUntilSecure) || DEFAULT_STATE.validUntil,
-        lastVerified: normalizeStored(lastVerifiedSecure) || DEFAULT_STATE.lastVerified,
-        subscriptionProductId: (subscriptionProductIdSecure as SubscriptionProductId | null) ?? DEFAULT_STATE.subscriptionProductId,
-        latestReceipt: normalizeStored(latestReceiptSecure) || DEFAULT_STATE.latestReceipt,
-        tokens: tokensValue ? Math.min(TOKEN_CAP, Number(tokensValue)) : DEFAULT_STATE.tokens,
-        goalMode: sanitizeGoalMode(goalModeValue),
-        history: parseHistory(historyValue),
-        lastFreeClaim: normalizeStored(lastFreeClaimValue) || DEFAULT_STATE.lastFreeClaim,
-      });
-      setHydrated(true);
+        if (subscriptionStatusFromSecure && subscriptionStatusSecure == null && legacySubscriptionStatusSecure != null) {
+          migrations.push(persistSecure(STORAGE_KEYS.subscriptionStatus, subscriptionStatusFromSecure));
+          migrations.push(persistSecure(LEGACY_STORAGE_KEYS.subscriptionStatus, null));
+        }
+        if (validUntilFromSecure && validUntilSecure == null && legacyValidUntilSecure != null) {
+          migrations.push(persistSecure(STORAGE_KEYS.validUntil, validUntilFromSecure));
+          migrations.push(persistSecure(LEGACY_STORAGE_KEYS.validUntil, null));
+        }
+        if (lastVerifiedFromSecure && lastVerifiedSecure == null && legacyLastVerifiedSecure != null) {
+          migrations.push(persistSecure(STORAGE_KEYS.lastVerified, lastVerifiedFromSecure));
+          migrations.push(persistSecure(LEGACY_STORAGE_KEYS.lastVerified, null));
+        }
+        if (subscriptionProductIdFromSecure && subscriptionProductIdSecure == null && legacySubscriptionProductIdSecure != null) {
+          migrations.push(persistSecure(STORAGE_KEYS.subscriptionProductId, subscriptionProductIdFromSecure));
+          migrations.push(persistSecure(LEGACY_STORAGE_KEYS.subscriptionProductId, null));
+        }
+        if (latestReceiptFromSecure && latestReceiptSecure == null && legacyLatestReceiptSecure != null) {
+          migrations.push(persistSecure(STORAGE_KEYS.latestReceipt, latestReceiptFromSecure));
+          migrations.push(persistSecure(LEGACY_STORAGE_KEYS.latestReceipt, null));
+        }
+
+        if (migrations.length > 0) {
+          await Promise.all(migrations);
+        }
+
+        if (cancelled) return;
+        setState({
+          subscriptionStatus: (subscriptionStatusFromSecure as SubscriptionStatus) || DEFAULT_STATE.subscriptionStatus,
+          validUntil: normalizeStored(validUntilFromSecure) || DEFAULT_STATE.validUntil,
+          lastVerified: normalizeStored(lastVerifiedFromSecure) || DEFAULT_STATE.lastVerified,
+          subscriptionProductId: (subscriptionProductIdFromSecure as SubscriptionProductId | null) ?? DEFAULT_STATE.subscriptionProductId,
+          latestReceipt: normalizeStored(latestReceiptFromSecure) || DEFAULT_STATE.latestReceipt,
+          tokens: tokensValue ? Math.min(TOKEN_CAP, Number(tokensValue)) : DEFAULT_STATE.tokens,
+          goalMode: sanitizeGoalMode(goalModeValue),
+          history: parseHistory(historyValue),
+          lastFreeClaim: normalizeStored(lastFreeClaimValue) || DEFAULT_STATE.lastFreeClaim,
+          onboardingComplete: onboardingValue === 'true',
+          profile: parseProfile(profileValue),
+        });
+      } catch (err) {
+        console.warn('App state hydration failed; falling back to defaults', err);
+        if (!cancelled) {
+          setState(DEFAULT_STATE);
+        }
+      } finally {
+        if (!cancelled) setHydrated(true);
+      }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -333,6 +466,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           persistAsync(STORAGE_KEYS.goalMode, state.goalMode),
           persistAsync(STORAGE_KEYS.history, JSON.stringify(state.history)),
           persistAsync(STORAGE_KEYS.lastFreeClaim, state.lastFreeClaim),
+          persistAsync(STORAGE_KEYS.onboardingComplete, state.onboardingComplete ? 'true' : 'false'),
+          persistAsync(STORAGE_KEYS.profile, JSON.stringify(state.profile ?? {})),
         ]);
       } catch (err) {
         console.warn('State persistence failed', err);
@@ -529,6 +664,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   }, []);
 
+  const setProfile = useCallback((updates: Partial<UserProfile>) => {
+    setState((prev) => {
+      const nextProfile = { ...prev.profile, ...updates };
+      void persistAsync(STORAGE_KEYS.profile, JSON.stringify(nextProfile));
+      return { ...prev, profile: nextProfile };
+    });
+  }, []);
+
+  const completeOnboarding = useCallback(() => {
+    setState((prev) => {
+      if (prev.onboardingComplete) return prev;
+      void persistAsync(STORAGE_KEYS.onboardingComplete, 'true');
+      return { ...prev, onboardingComplete: true };
+    });
+  }, []);
+
   const api = useMemo<AppContextType>(
     () => ({
       ...state,
@@ -543,6 +694,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       removeScanResult,
       clearHistory,
       claimFreeTokens,
+      setProfile,
+      completeOnboarding,
     }),
     [
       state,
@@ -557,6 +710,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       removeScanResult,
       clearHistory,
       claimFreeTokens,
+      setProfile,
+      completeOnboarding,
     ]
   );
 

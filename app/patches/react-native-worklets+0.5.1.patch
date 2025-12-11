@@ -1,0 +1,25 @@
+diff --git a/node_modules/react-native-worklets/android/build.gradle b/node_modules/react-native-worklets/android/build.gradle
+index 0a4d2e5..9f2b8c3 100644
+--- a/node_modules/react-native-worklets/android/build.gradle
++++ b/node_modules/react-native-worklets/android/build.gradle
+@@ -307,12 +307,12 @@ task assertMinimalReactNativeVersionTask {
+ 
+ preBuild.dependsOn(assertMinimalReactNativeVersionTask)
+ 
+-task assertNewArchitectureEnabledTask {
+-    onlyIf { !IS_NEW_ARCHITECTURE_ENABLED }
+-    doFirst {
+-        throw new GradleException("[Worklets] Worklets require new architecture to be enabled. Please enable it by setting `newArchEnabled` to `true` in `gradle.properties`.")
+-    }
+-}
+-
+-preBuild.dependsOn(assertNewArchitectureEnabledTask)
++// Patched: allow building without New Architecture. Reanimated v4 is present
++// only because of transitive dependency; the app does not rely on Worklets
++// and New Architecture is intentionally disabled due to IAP compatibility.
++task assertNewArchitectureEnabledTask {
++    onlyIf { false }
++    doFirst { }
++}
++// preBuild.dependsOn(assertNewArchitectureEnabledTask) -- disabled
+

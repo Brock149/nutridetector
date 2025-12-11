@@ -58,6 +58,51 @@ const PANEL_GRADIENT = ['#123130', '#102624'] as const;
 const HERO_GRADIENT = ['#1f6154', '#154238'] as const;
 const PRIMARY_TEXT = '#f6fffb';
 const MUTED_TEXT = 'rgba(246,255,251,0.68)';
+const RATING_COLORS = {
+  excellent: '#6ddcff',
+  good: '#42d5b9',
+  mid: '#f5c451',
+  bad: '#ef6f6f',
+} as const;
+
+type MetricRatingBucket = 'excellent' | 'good' | 'mid' | 'bad';
+
+type MetricRating = {
+  bucket: MetricRatingBucket;
+  label: string;
+  color: string;
+  trackMax: number;
+};
+
+const CAL_PER_PROTEIN_THRESHOLDS = {
+  excellentMax: 8,
+  goodMax: 13.5,
+  midMax: 20,
+  trackMax: 26,
+} as const;
+
+const rateCaloriesPerProtein = (value?: number): MetricRating | null => {
+  if (!Number.isFinite(value) || value == null) return null;
+  let bucket: MetricRatingBucket;
+  if (value <= CAL_PER_PROTEIN_THRESHOLDS.excellentMax) bucket = 'excellent';
+  else if (value <= CAL_PER_PROTEIN_THRESHOLDS.goodMax) bucket = 'good';
+  else if (value <= CAL_PER_PROTEIN_THRESHOLDS.midMax) bucket = 'mid';
+  else bucket = 'bad';
+
+  return {
+    bucket,
+    label:
+      bucket === 'excellent'
+        ? 'Excellent'
+        : bucket === 'good'
+        ? 'Good'
+        : bucket === 'mid'
+        ? 'Medium'
+        : 'Poor',
+    color: RATING_COLORS[bucket],
+    trackMax: Math.max(CAL_PER_PROTEIN_THRESHOLDS.trackMax, value + 4),
+  };
+};
 
 const MealSlider: React.FC<MealSliderProps> = ({ value, min, max, step, onChange }) => {
   const [internal, setInternal] = useState<number>(value);
@@ -212,6 +257,8 @@ export default function ResultsScreen() {
   const [editServingUnit, setEditServingUnit] = useState('');
   const [editServingAltValue, setEditServingAltValue] = useState('');
   const [editServingAltUnit, setEditServingAltUnit] = useState('');
+  const [activeMetric, setActiveMetric] = useState<string | null>(null);
+  const [gaugeWidth, setGaugeWidth] = useState(0);
 
   const metrics = useMemo(() => {
     const priceSafe = price > 0 ? price : 1;
@@ -369,11 +416,10 @@ export default function ResultsScreen() {
 
   const topMetrics = useMemo<MetricDescriptor[]>(
     () => [
-      { key: 'costPerDollar', label: 'Cost per dollar', value: formatCurrency(price) },
       { key: 'costPerMeal', label: 'Cost per meal', value: formatCurrency(metrics.costPerMeal) },
       { key: 'caloriesPerProtein', label: 'Calories per protein', value: formatNumber(metrics.caloriesPerProtein, 2) },
     ],
-    [price, metrics.costPerMeal, metrics.caloriesPerProtein]
+    [metrics.costPerMeal, metrics.caloriesPerProtein]
   );
 
   const supportingMetrics = useMemo<MetricDescriptor[]>(
@@ -381,7 +427,6 @@ export default function ResultsScreen() {
       { key: 'proteinPerDollar', label: 'Protein per dollar', value: formatNumber(metrics.proteinPerDollar, 1), suffix: 'g' },
       { key: 'caloriesPerDollar', label: 'Calories per dollar', value: formatNumber(metrics.caloriesPerDollar, 0), suffix: 'cals' },
       { key: 'costPerServing', label: 'Cost per serving', value: formatCurrency(metrics.costPerServing) },
-      { key: 'mealsPerContainer', label: 'Meals per container', value: formatNumber(metrics.mealsPerContainer, 2) },
       { key: 'caloriesPerServing', label: 'Calories per serving', value: formatSimple(calories, 0), suffix: 'cals' },
       { key: 'proteinPerServing', label: 'Protein per serving', value: formatSimple(proteinGrams, 1), suffix: 'g' },
     ],
@@ -397,6 +442,38 @@ export default function ResultsScreen() {
   }, [supportingMetrics]);
 
   const showDevTools = __DEV__ && !!rawText;
+  const caloriesPerProteinRating = useMemo(() => rateCaloriesPerProtein(metrics.caloriesPerProtein), [metrics.caloriesPerProtein]);
+  const caloriesPerProteinPointerRatio = useMemo(() => {
+    if (!caloriesPerProteinRating) return 0;
+    const value = Number.isFinite(metrics.caloriesPerProtein) ? (metrics.caloriesPerProtein ?? 0) : 0;
+    const section = 0.25;
+    const { excellentMax, goodMax, midMax, trackMax } = CAL_PER_PROTEIN_THRESHOLDS;
+    if (value <= excellentMax) {
+      return clamp((value / excellentMax) * section, 0, section);
+    }
+    if (value <= goodMax) {
+      return clamp(section + ((value - excellentMax) / (goodMax - excellentMax)) * section, section, section * 2);
+    }
+    if (value <= midMax) {
+      return clamp(section * 2 + ((value - goodMax) / (midMax - goodMax)) * section, section * 2, section * 3);
+    }
+    const upper = Math.max(trackMax, midMax + 8, value + 1);
+    return clamp(section * 3 + ((Math.min(value, upper) - midMax) / (upper - midMax)) * section, section * 3, 1);
+  }, [metrics.caloriesPerProtein, caloriesPerProteinRating]);
+  const caloriesPerProteinBarSegments = useMemo(() => {
+    if (!caloriesPerProteinRating) return [];
+    const total = caloriesPerProteinRating.trackMax;
+    const lenExcellent = CAL_PER_PROTEIN_THRESHOLDS.excellentMax;
+    const lenGood = CAL_PER_PROTEIN_THRESHOLDS.goodMax - CAL_PER_PROTEIN_THRESHOLDS.excellentMax;
+    const lenMid = CAL_PER_PROTEIN_THRESHOLDS.midMax - CAL_PER_PROTEIN_THRESHOLDS.goodMax;
+    const lenBad = Math.max(total - CAL_PER_PROTEIN_THRESHOLDS.midMax, 0.001);
+    return [
+      { key: 'excellent', color: RATING_COLORS.excellent, flex: lenExcellent },
+      { key: 'good', color: RATING_COLORS.good, flex: lenGood },
+      { key: 'mid', color: RATING_COLORS.mid, flex: lenMid },
+      { key: 'bad', color: RATING_COLORS.bad, flex: lenBad },
+    ];
+  }, [caloriesPerProteinRating]);
 
   return (
     <LinearGradient colors={PANEL_GRADIENT} style={styles.screen}>
@@ -422,13 +499,142 @@ export default function ResultsScreen() {
           </View>
 
           <View style={styles.metricRow}>
-            {topMetrics.map((metric) => (
-              <View key={metric.key} style={styles.metricCell}>
-                <Text style={styles.metricLabel}>{metric.label}</Text>
-                <Text style={styles.metricValue}>{metric.value}</Text>
-              </View>
-            ))}
+            {topMetrics.map((metric) => {
+              const isCalPerProtein = metric.key === 'caloriesPerProtein';
+              const isActive = activeMetric === metric.key;
+              const rating = isCalPerProtein ? caloriesPerProteinRating : null;
+              return (
+                <Pressable
+                  key={metric.key}
+                  style={({ pressed }) => [
+                    styles.metricCell,
+                    isActive ? styles.metricCellActive : null,
+                    pressed ? styles.metricCellPressed : null,
+                  ]}
+                  onPress={() => {
+                    if (isCalPerProtein) {
+                      setActiveMetric(isActive ? null : metric.key);
+                    } else {
+                      setActiveMetric(null);
+                    }
+                  }}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${metric.label} ${metric.value}${
+                    rating ? ` rated ${rating.label}` : ''
+                  }`}
+                >
+                  <Text style={styles.metricLabel}>{metric.label}</Text>
+                  <Text style={[styles.metricValue, rating ? { color: rating.color } : null]}>
+                    {metric.value}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
+          {activeMetric === 'caloriesPerProtein' && caloriesPerProteinRating ? (
+            <View style={styles.metricDetailCard}>
+              <View style={styles.metricDetailHeader}>
+                <View style={styles.metricDetailValueBlock}>
+                  <Text style={styles.metricDetailLabel}>Calories per protein</Text>
+                  <View style={styles.metricDetailValueRow}>
+                    <Text style={styles.metricDetailValue}>{formatNumber(metrics.caloriesPerProtein, 2)}</Text>
+                    <Text style={styles.metricDetailUnit}>cal / g protein</Text>
+                  </View>
+                </View>
+                <View
+                  style={[
+                    styles.metricDetailBadge,
+                    {
+                      borderColor: caloriesPerProteinRating.color,
+                      backgroundColor: `${caloriesPerProteinRating.color}1A`,
+                    },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.metricBadgeDot,
+                      { backgroundColor: caloriesPerProteinRating.color, marginRight: 6 },
+                    ]}
+                  />
+                  <Text style={[styles.metricBadgeText, { color: caloriesPerProteinRating.color }]}>
+                    {caloriesPerProteinRating.label}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.metricGaugeContainer}>
+                <View style={styles.metricGaugeMarkersRow} pointerEvents="none">
+                  <View style={styles.metricGaugeMarkerSpacer} />
+                  <Text style={styles.metricGaugeMarkerText}>{CAL_PER_PROTEIN_THRESHOLDS.excellentMax}</Text>
+                  <Text style={styles.metricGaugeMarkerText}>{CAL_PER_PROTEIN_THRESHOLDS.goodMax}</Text>
+                  <Text style={styles.metricGaugeMarkerText}>{CAL_PER_PROTEIN_THRESHOLDS.midMax}</Text>
+                  <View style={styles.metricGaugeMarkerSpacer} />
+                </View>
+
+                <View style={styles.metricGaugePointerRow}>
+                  <View
+                    style={styles.metricGaugeTrack}
+                    onLayout={(e) => setGaugeWidth(e.nativeEvent.layout.width)}
+                  >
+                    <View style={styles.metricGaugeTrackSegments}>
+                      <View
+                        style={[
+                          styles.metricGaugeTrackSegment,
+                          { flex: 1, backgroundColor: RATING_COLORS.excellent },
+                        ]}
+                      />
+                      <View style={styles.metricGaugeTrackDivider} />
+                      <View
+                        style={[
+                          styles.metricGaugeTrackSegment,
+                          { flex: 1, backgroundColor: RATING_COLORS.good },
+                        ]}
+                      />
+                      <View style={styles.metricGaugeTrackDivider} />
+                      <View
+                        style={[
+                          styles.metricGaugeTrackSegment,
+                          { flex: 1, backgroundColor: RATING_COLORS.mid },
+                        ]}
+                      />
+                      <View style={styles.metricGaugeTrackDivider} />
+                      <View
+                        style={[
+                          styles.metricGaugeTrackSegment,
+                          { flex: 1, backgroundColor: RATING_COLORS.bad },
+                        ]}
+                      />
+                    </View>
+                    <View
+                      style={[
+                        styles.metricGaugePointer,
+                        {
+                          left: gaugeWidth * caloriesPerProteinPointerRatio - 6,
+                          borderColor: caloriesPerProteinRating.color,
+                        },
+                      ]}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.metricGaugeLabelsRow} pointerEvents="none">
+                  <View style={styles.metricGaugeLabelItem}>
+                    <Text style={[styles.metricGaugeLabelText, { color: RATING_COLORS.excellent }]}>Excellent</Text>
+                  </View>
+                  <View style={styles.metricGaugeLabelItem}>
+                    <Text style={[styles.metricGaugeLabelText, { color: RATING_COLORS.good }]}>Good</Text>
+                  </View>
+                  <View style={styles.metricGaugeLabelItem}>
+                    <Text style={[styles.metricGaugeLabelText, { color: RATING_COLORS.mid }]}>Medium</Text>
+                  </View>
+                  <View style={styles.metricGaugeLabelItem}>
+                    <Text style={[styles.metricGaugeLabelText, { color: RATING_COLORS.bad }]}>Poor</Text>
+                  </View>
+                </View>
+              </View>
+            </View>
+          ) : null}
 
           <View style={styles.sliderSection}>
             <View style={styles.sliderHeaderRow}>
@@ -917,6 +1123,16 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     gap: 6,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  metricCellActive: {
+    backgroundColor: 'rgba(44,208,177,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(66,213,185,0.35)',
+  },
+  metricCellPressed: {
+    opacity: 0.8,
   },
   metricLabel: {
     color: MUTED_TEXT,
@@ -929,5 +1145,150 @@ const styles = StyleSheet.create({
     color: PRIMARY_TEXT,
     fontSize: 16,
     fontWeight: '600',
+  },
+  metricBadge: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  metricBadgeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  metricBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  metricDetailCard: {
+    marginTop: 10,
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(170,239,219,0.25)',
+    backgroundColor: 'rgba(9,30,26,0.9)',
+    gap: 12,
+  },
+  metricDetailHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  metricDetailValueBlock: {
+    flex: 1,
+    gap: 4,
+  },
+  metricDetailLabel: {
+    color: MUTED_TEXT,
+    fontSize: 12,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  metricDetailValueRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  metricDetailValue: {
+    color: PRIMARY_TEXT,
+    fontSize: 24,
+    fontWeight: '700',
+  },
+  metricDetailUnit: {
+    color: MUTED_TEXT,
+    fontSize: 12,
+    marginBottom: 2,
+  },
+  metricDetailBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  metricGauge: {
+    marginTop: 12,
+    gap: 8,
+  },
+  metricGaugeContainer: {
+    borderRadius: 14,
+    borderWidth: 0,
+    borderColor: 'transparent',
+    backgroundColor: 'rgba(9,30,26,0.6)',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    gap: 4,
+  },
+  metricGaugePointerRow: {
+    marginTop: 0,
+  },
+  metricGaugeTrack: {
+    height: 14,
+    borderRadius: 10,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  metricGaugeTrackSegments: {
+    flex: 1,
+    flexDirection: 'row',
+    height: '100%',
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  },
+  metricGaugeTrackSegment: {
+    height: '100%',
+  },
+  metricGaugeTrackDivider: {
+    width: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    opacity: 0.6,
+  },
+  metricGaugeMarkersRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 6,
+  },
+  metricGaugeMarkerText: {
+    color: MUTED_TEXT,
+    fontSize: 12,
+  },
+  metricGaugeMarkerSpacer: {
+    width: 6,
+  },
+  metricGaugeLabelsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+  },
+  metricGaugeLabelItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  metricGaugeLabelText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  metricGaugePointer: {
+    position: 'absolute',
+    top: -4,
+    width: 12,
+    height: 22,
+    borderRadius: 8,
+    borderWidth: 2,
+    backgroundColor: 'rgba(8,50,41,0.95)',
+    transform: [{ translateX: -6 }],
   },
 });

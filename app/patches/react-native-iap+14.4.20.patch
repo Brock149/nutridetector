@@ -1,0 +1,41 @@
+diff --git a/node_modules/react-native-iap/ios/HybridRnIap.swift b/node_modules/react-native-iap/ios/HybridRnIap.swift
+index 20270b6..0178de1 100644
+--- a/node_modules/react-native-iap/ios/HybridRnIap.swift
++++ b/node_modules/react-native-iap/ios/HybridRnIap.swift
+@@ -303,34 +303,8 @@ class HybridRnIap: HybridRnIapSpec {
+     
+     func validateReceipt(params: NitroReceiptValidationParams) throws -> Promise<Variant_NitroReceiptValidationResultIOS_NitroReceiptValidationResultAndroid> {
+         return Promise.async {
+-            do {
+-                RnIapLog.payload("validateReceiptIOS", ["sku": params.sku])
+-                let props = try OpenIapSerialization.receiptValidationProps(from: ["sku": params.sku])
+-                let result = try await OpenIapModule.shared.validateReceiptIOS(props)
+-                var encoded = RnIapHelper.sanitizeDictionary(OpenIapSerialization.encode(result))
+-                if encoded["receiptData"] != nil {
+-                    encoded["receiptData"] = "<receipt>"
+-                }
+-                if encoded["jwsRepresentation"] != nil {
+-                    encoded["jwsRepresentation"] = "<jws>"
+-                }
+-                RnIapLog.result("validateReceiptIOS", encoded)
+-                var latest: NitroPurchase? = nil
+-                if let transaction = result.latestTransaction {
+-                    let payload = RnIapHelper.sanitizeDictionary(OpenIapSerialization.purchase(transaction))
+-                    latest = RnIapHelper.convertPurchaseDictionary(payload)
+-                }
+-                let mapped = NitroReceiptValidationResultIOS(
+-                    isValid: result.isValid,
+-                    receiptData: result.receiptData,
+-                    jwsRepresentation: result.jwsRepresentation,
+-                    latestTransaction: latest
+-                )
+-                return .first(mapped)
+-            } catch {
+-                RnIapLog.failure("validateReceiptIOS", error: error)
+-                throw PurchaseError.make(code: .receiptFailed, message: error.localizedDescription)
+-            }
++            RnIapLog.warn("validateReceiptIOS not available in this build")
++            throw PurchaseError.make(code: .receiptFailed, message: "Receipt validation is not configured for this build.")
+         }
+     }
+ 

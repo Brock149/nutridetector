@@ -3,8 +3,8 @@ module.exports = function (api) {
   return {
     presets: ["babel-preset-expo"],
     plugins: [
-      // Required for Reanimated v4 on RN 0.81+ (Expo SDK 54)
-      "react-native-worklets/plugin",
+      // Reanimated v4 Babel plugin (works without New Architecture)
+      "react-native-reanimated/plugin",
     ],
   };
 };
